@@ -1,0 +1,6 @@
+**/.vscode/**
+**/build/**
+**/build_run/**
+**/cmake-build-relwithdebinfo/**
+
+results/**
