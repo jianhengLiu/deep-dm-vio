@@ -444,16 +444,19 @@ EFResidual* EnergyFunctional::insertResidual(PointFrameResidual* r)
 	r->efResidual = efr;
 	return efr;
 }
+//@ 向能量函数中增加一帧, 进行的操作: 改变正规方程, 重新排ID, 共视关系
 EFFrame* EnergyFunctional::insertFrame(FrameHessian* fh, CalibHessian* Hcalib)
 {
+	// 建立优化用的能量函数帧. 并加进能量函数frames中
 	EFFrame* eff = new EFFrame(fh);
 	eff->idx = frames.size();
 	frames.push_back(eff);
 
 	nFrames++;
-	fh->efFrame = eff;
+	fh->efFrame = eff;// FrameHessian 指向能量函数帧
 
-	assert(HM.cols() == 8*nFrames+CPARS-8);
+	assert(HM.cols() == 8*nFrames+CPARS-8); // 边缘化掉一帧, 缺8个
+	// 一个帧8个参数 + 相机内参
 	bM.conservativeResize(8*nFrames+CPARS);
     bMForGTSAM.conservativeResize(8 * nFrames + CPARS);
 	HM.conservativeResize(8*nFrames+CPARS,8*nFrames+CPARS);
@@ -469,12 +472,13 @@ EFFrame* EnergyFunctional::insertFrame(FrameHessian* fh, CalibHessian* Hcalib)
 	EFAdjointsValid=false;
 	EFDeltaValid=false;
 
-	setAdjointsF(Hcalib);
-	makeIDX();
+	setAdjointsF(Hcalib);	// 设置伴随矩阵
+	makeIDX();	// 设置ID
 
 
 	for(EFFrame* fh2 : frames)
 	{
+		// 前32位是host帧的历史ID, 后32位是Target的历史ID
         connectivityMap[(((uint64_t)eff->frameID) << 32) + ((uint64_t)fh2->frameID)] = Eigen::Vector2i(0,0);
 		if(fh2 != eff)
             connectivityMap[(((uint64_t)fh2->frameID) << 32) + ((uint64_t)eff->frameID)] = Eigen::Vector2i(0,0);

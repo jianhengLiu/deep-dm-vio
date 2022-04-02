@@ -2,5 +2,6 @@
 **/build/**
 **/build_run/**
 **/cmake-build-relwithdebinfo/**
+**/.cache/**
 
 results/**

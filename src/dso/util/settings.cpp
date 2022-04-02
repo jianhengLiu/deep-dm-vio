@@ -225,7 +225,7 @@ bool setting_render_displayResidual = true;
 bool setting_render_displayVideo = true;
 bool setting_render_displayDepth = true;
 
-bool setting_fullResetRequested = false;
+bool setting_fullResetRequested = false; // GUI重启按键
 
 bool setting_debugout_runquiet = false;
 
