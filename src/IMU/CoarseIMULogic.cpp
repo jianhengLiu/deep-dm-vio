@@ -1,54 +1,62 @@
 /**
-* This file is part of DM-VIO.
-* The code in this file is in part based on code written by Vladyslav Usenko for the paper "Direct Visual-Inertial Odometry with Stereo Cameras".
-*
-* Copyright (c) 2022 Lukas von Stumberg <lukas dot stumberg at tum dot de>, Vladyslav Usenko
-* for more information see <http://vision.in.tum.de/dm-vio>.
-* If you use this code, please cite the respective publications as
-* listed on the above website.
-*
-* DM-VIO is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* DM-VIO is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with DM-VIO. If not, see <http://www.gnu.org/licenses/>.
-*/
+ * This file is part of DM-VIO.
+ * The code in this file is in part based on code written by Vladyslav Usenko for the paper "Direct Visual-Inertial Odometry with Stereo Cameras".
+ *
+ * Copyright (c) 2022 Lukas von Stumberg <lukas dot stumberg at tum dot de>, Vladyslav Usenko
+ * for more information see <http://vision.in.tum.de/dm-vio>.
+ * If you use this code, please cite the respective publications as
+ * listed on the above website.
+ *
+ * DM-VIO is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * DM-VIO is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with DM-VIO. If not, see <http://www.gnu.org/licenses/>.
+ */
 
-#include <GTSAMIntegration/Marginalization.h>
-#include <util/TimeMeasurement.h>
 #include "CoarseIMULogic.h"
+#include "GTSAMIntegration/GTSAMUtils.h"
 #include "IMUInitialization/GravityInitializer.h"
 #include "IMUUtils.h"
-#include "GTSAMIntegration/GTSAMUtils.h"
-
+#include <GTSAMIntegration/Marginalization.h>
+#include <util/TimeMeasurement.h>
 
 dmvio::CoarseIMULogic::CoarseIMULogic(std::unique_ptr<PoseTransformation> transformBAToIMU,
-                                      boost::shared_ptr<gtsam::PreintegrationParams> preintegrationParams,
-                                      const IMUCalibration& imuCalibration, dmvio::IMUSettings& imuSettings)
-        : transformBAToIMU(std::move(transformBAToIMU)),
-          preintegrationParams(preintegrationParams),
-          imuSettings(imuSettings),
-          imuCalibration(imuCalibration)
+    boost::shared_ptr<gtsam::PreintegrationParams> preintegrationParams,
+    const IMUCalibration& imuCalibration, dmvio::IMUSettings& imuSettings)
+    : transformBAToIMU(std::move(transformBAToIMU))
+    , preintegrationParams(preintegrationParams)
+    , imuSettings(imuSettings)
+    , imuCalibration(imuCalibration)
 {
     coarseBiasFile.open(imuSettings.resultsPrefix + "coarsebiasdso.txt");
 }
 
-
+/**
+ * @brief 进行因子图优化
+ *
+ * @param imuData
+ * @param frameId
+ * @param frameTimestamp
+ * @param lastFrameId
+ * @param additionalMeasurements
+ * @param dontMargFrame
+ * @return Sophus::SE3d
+ */
 Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, int frameId, double frameTimestamp,
-                                               int lastFrameId,
-                                               boost::shared_ptr<gtsam::PreintegratedImuMeasurements> additionalMeasurements,
-                                               int dontMargFrame)
+    int lastFrameId,
+    boost::shared_ptr<gtsam::PreintegratedImuMeasurements> additionalMeasurements,
+    int dontMargFrame)
 {
     dmvio::TimeMeasurement timeMeasurement("addIMUData");
-    if(lastFrameId < 0)
-    {
+    if (lastFrameId < 0) {
         lastFrameId = frameId - 1;
     }
 
@@ -59,7 +67,7 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
     // add symbols to graph:
     gtsam::Pose3 currentPose = coarseValues->at<gtsam::Pose3>(gtsam::Symbol('p', lastFrameId));
     gtsam::imuBias::ConstantBias currentBias = coarseValues->at<gtsam::imuBias::ConstantBias>(
-            gtsam::Symbol('b', lastFrameId));
+        gtsam::Symbol('b', lastFrameId));
     gtsam::Vector3 currentVelocity = coarseValues->at<gtsam::Vector3>(gtsam::Symbol('v', lastFrameId));
 
     // Select factors to marginalize out. We want to keep in the graph keyframe pose, previous and current states. We also want to keep the prepared keyframe pose
@@ -68,36 +76,33 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
 
     gtsam::FastSet<gtsam::Key> setOfKeysToMarginalize;
 
-    for(const gtsam::Key& k : keysInGraph)
-    {
+    for (const gtsam::Key& k : keysInGraph) {
         gtsam::Symbol s(k);
 
         int idx = s.index();
 
-        if(s.chr() == 's')
+        if (s.chr() == 's')
             continue;
 
-        if(idx == frameId || idx == lastFrameId)
+        if (idx == frameId || idx == lastFrameId)
             continue;
 
-        if((idx == keyframeId || idx == dontMargFrame) && s.chr() == 'p')
+        if ((idx == keyframeId || idx == dontMargFrame) && s.chr() == 'p')
             continue;
 
-        if(setOfKeysToMarginalize.find(k) == setOfKeysToMarginalize.end())
-        {
+        if (setOfKeysToMarginalize.find(k) == setOfKeysToMarginalize.end()) {
             keysToMarginalize.push_back(k);
             setOfKeysToMarginalize.insert(k);
         }
     }
 
-    if(!keysToMarginalize.empty())
-    {
+    if (!keysToMarginalize.empty()) {
         coarseGraph = marginalizeOut(*coarseGraph, *coarseValues, keysToMarginalize, nullptr, true);
     }
 
     // Define keys to be used in this iteration
     gtsam::Key poseKeyframeKey = gtsam::Symbol('p',
-                                               keyframeId);
+        keyframeId);
 
     gtsam::Key poseCurrentKey = gtsam::Symbol('p', frameId);
     gtsam::Key velCurrentKey = gtsam::Symbol('v', frameId);
@@ -109,30 +114,27 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
 
     // Integrate IMU data
     boost::shared_ptr<gtsam::PreintegratedImuMeasurements> imuMeasurements;
-    if(additionalMeasurements)
-    {
+    if (additionalMeasurements) {
         imuMeasurements = additionalMeasurements;
-    }else
-    {
+    } else {
         imuMeasurements.reset(new gtsam::PreintegratedImuMeasurements(preintegrationParams, currentBias));
     }
-    for(size_t i = 0; i < imuData.size(); i++)
-    {
+    for (size_t i = 0; i < imuData.size(); i++) {
         auto& measurement = imuData[i];
-        if(measurement.getIntegrationTime() == 0.0) continue;
+        if (measurement.getIntegrationTime() == 0.0)
+            continue;
         imuMeasurements->integrateMeasurement(gtsam::Vector(measurement.getAccData()),
-                                              gtsam::Vector(measurement.getGyrData()),
-                                              measurement.getIntegrationTime());
+            gtsam::Vector(measurement.getGyrData()),
+            measurement.getIntegrationTime());
     }
 
     // Create IMU factor.
     gtsam::ImuFactor::shared_ptr imuFactor(
-            new gtsam::ImuFactor(posePrevKey, velPrevKey,
-                                 poseCurrentKey, velCurrentKey, biasPrevKey,
-                                 *imuMeasurements));
+        new gtsam::ImuFactor(posePrevKey, velPrevKey,
+            poseCurrentKey, velCurrentKey, biasPrevKey,
+            *imuMeasurements));
 
-    if(imuMeasurements->preintMeasCov().hasNaN() || imuFactor->noiseModel()->sigmas().hasNaN())
-    {
+    if (imuMeasurements->preintMeasCov().hasNaN() || imuFactor->noiseModel()->sigmas().hasNaN()) {
         std::cout << "Exiting because of bad measurement covariance." << std::endl;
         exit(1);
     }
@@ -141,10 +143,11 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
 
     // Add bias random walk factor.
     gtsam::NonlinearFactor::shared_ptr bias_factor(
-            new gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(
-                    biasPrevKey, biasCurrentKey,
-                    gtsam::imuBias::ConstantBias(gtsam::Vector3::Zero(),
-                                                 gtsam::Vector3::Zero()), biasNoiseModel));
+        new gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(
+            biasPrevKey, biasCurrentKey,
+            gtsam::imuBias::ConstantBias(gtsam::Vector3::Zero(),
+                gtsam::Vector3::Zero()),
+            biasNoiseModel));
 
     // In the coarse graph we optimize poses in metric frame (imu to world), so we don't need any PoseTransformationFactors.
     // Instead, we transform the DSO Hessian to the metric frame.
@@ -155,25 +158,21 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
     coarseValues->insert(velCurrentKey, currentVelocity);
     coarseValues->insert(biasCurrentKey, currentBias);
 
-    if(currentPose.matrix().hasNaN() || currentVelocity.hasNaN() || currentBias.vector().hasNaN())
-    {
+    if (currentPose.matrix().hasNaN() || currentVelocity.hasNaN() || currentBias.vector().hasNaN()) {
         std::cout << "ERROR: NaNs in the system, exiting!" << std::endl;
         exit(1);
     }
 
     // Predict the new pose based on the IMU data (will be used as an initialization).
     gtsam::LevenbergMarquardtOptimizer::shared_ptr optimizer(
-            new gtsam::LevenbergMarquardtOptimizer(*coarseGraph, *coarseValues));
+        new gtsam::LevenbergMarquardtOptimizer(*coarseGraph, *coarseValues));
     gtsam::Values optimizedValues = optimizer->optimize();
     gtsam::Values newValues;
-    for(gtsam::Values::iterator it = optimizedValues.begin(); it != optimizedValues.end(); ++it)
-    {
-        if(gtsam::Symbol((*it).key).index() == currentKeyframeId && imuSettings.fixKeyframeDuringCoarseTracking)
-        {
+    for (gtsam::Values::iterator it = optimizedValues.begin(); it != optimizedValues.end(); ++it) {
+        if (gtsam::Symbol((*it).key).index() == currentKeyframeId && imuSettings.fixKeyframeDuringCoarseTracking) {
             // Don't change the values of the keyframe...
             newValues.insert(it->key, coarseValues->at(it->key));
-        }else
-        {
+        } else {
             newValues.insert(it->key, it->value);
         }
     }
@@ -182,7 +181,7 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
     transformIMUToDSOForCoarse->updateWithValues(*coarseValues);
     // Convert T_w_f to T_f_r:
     Sophus::SE3d referenceToFrame(
-            transformIMUToDSOForCoarse->transformPose(coarseValues->at<gtsam::Pose3>(poseCurrentKey).matrix()));
+        transformIMUToDSOForCoarse->transformPose(coarseValues->at<gtsam::Pose3>(poseCurrentKey).matrix()));
 
     currentPoseKey = poseCurrentKey;
     refPoseKey = poseKeyframeKey;
@@ -195,10 +194,8 @@ Sophus::SE3d dmvio::CoarseIMULogic::addIMUData(const dmvio::IMUData& imuData, in
     set.insert(refPoseKey);
     set.insert(currentPoseKey);
 
-    for(const gtsam::Key& k : coarseGraph->keys())
-    {
-        if(k != refPoseKey && k != currentPoseKey)
-        {
+    for (const gtsam::Key& k : coarseGraph->keys()) {
+        if (k != refPoseKey && k != currentPoseKey) {
             coarseOrdering.push_back(k);
             set.insert(k);
         }
@@ -218,8 +215,7 @@ dmvio::CoarseIMULogic::initCoarseGraph(int keyframeId, std::unique_ptr<Informati
     gtsam::Key biasKey0 = gtsam::Symbol('b', keyframeId);
 
     // Take over transforms from BA.
-    if(informationBAToCoarse)
-    {
+    if (informationBAToCoarse) {
         transformBAToIMU = std::move(informationBAToCoarse->transformBAToIMU);
         transformIMUToDSOForCoarse = std::move(informationBAToCoarse->transformIMUToDSOForCoarse);
         scale = informationBAToCoarse->latestBAScale;
@@ -235,8 +231,7 @@ dmvio::CoarseIMULogic::initCoarseGraph(int keyframeId, std::unique_ptr<Informati
     gtsam::Pose3 poseFromBA;
     bool gotBABias = !(imuSettings.skipFirstKeyframe && firstCoarseInit);
 
-    if(informationBAToCoarse)
-    {
+    if (informationBAToCoarse) {
         initialVelocity = informationBAToCoarse->latestBAVel;
         initialBias = informationBAToCoarse->latestBABias;
         poseFromBA = informationBAToCoarse->latestBAPose;
@@ -253,26 +248,27 @@ dmvio::CoarseIMULogic::initCoarseGraph(int keyframeId, std::unique_ptr<Informati
     double gyrBiasVariance = imuSettings.baToCoarseGyrBiasVariance;
 
     gtsam::noiseModel::Diagonal::shared_ptr pose_prior_model = gtsam::noiseModel::Diagonal::Variances((gtsam::Vector(6)
-            << rotVariance, rotVariance, rotVariance, poseVariance, poseVariance, poseVariance).finished());
+            << rotVariance,
+        rotVariance, rotVariance, poseVariance, poseVariance, poseVariance)
+                                                                                                          .finished());
     coarseGraph->add(gtsam::PriorFactor<gtsam::Pose3>(poseKey0, initialPose, pose_prior_model));
 
     // Add prior on bias and velocity.
-    if(gotBABias)
-    {
-        if(imuSettings.setting_transferCovToCoarse)
-        {
+    if (gotBABias) {
+        if (imuSettings.setting_transferCovToCoarse) {
             coarseGraph->add(informationBAToCoarse->priorFactor);
-        }else
-        {
+        } else {
             gtsam::noiseModel::Diagonal::shared_ptr vel_prior_model = gtsam::noiseModel::Diagonal::Variances(
-                    (gtsam::Vector(3) << velVariance, velVariance, velVariance).finished());
+                (gtsam::Vector(3) << velVariance, velVariance, velVariance).finished());
             coarseGraph->add(gtsam::PriorFactor<gtsam::Vector3>(velocityKey0, initialVelocity, vel_prior_model));
 
             gtsam::noiseModel::Diagonal::shared_ptr bias_prior_model = gtsam::noiseModel::Diagonal::Variances(
-                    (gtsam::Vector(6)
-                            << accBiasVariance, accBiasVariance, accBiasVariance, gyrBiasVariance, gyrBiasVariance, gyrBiasVariance).finished());
+                (gtsam::Vector(6)
+                        << accBiasVariance,
+                    accBiasVariance, accBiasVariance, gyrBiasVariance, gyrBiasVariance, gyrBiasVariance)
+                    .finished());
             coarseGraph->add(
-                    gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(biasKey0, initialBias, bias_prior_model));
+                gtsam::PriorFactor<gtsam::imuBias::ConstantBias>(biasKey0, initialBias, bias_prior_model));
         }
     }
 
@@ -284,8 +280,7 @@ dmvio::CoarseIMULogic::initCoarseGraph(int keyframeId, std::unique_ptr<Informati
 
     // BA gtsam poses are cam to world
     gtsam::Pose3 lastKFToCurr;
-    if(informationBAToCoarse)
-    {
+    if (informationBAToCoarse) {
         lastKFToCurr = informationBAToCoarse->latestBAPose.inverse() * informationBAToCoarse->latestBAPosePrevKeyframe;
     }
     return Sophus::SE3d(lastKFToCurr.matrix());
@@ -293,7 +288,7 @@ dmvio::CoarseIMULogic::initCoarseGraph(int keyframeId, std::unique_ptr<Informati
 
 Sophus::SE3d
 dmvio::CoarseIMULogic::computeCoarseUpdate(const dso::Mat88& H_in, const dso::Vec8& b_in, float extrapFac, float lambda,
-                                           double& incA, double& incB, double& incNorm)
+    double& incA, double& incB, double& incNorm)
 {
     dmvio::TimeMeasurement timeMeasurement("computeCoarseUpdate");
 
@@ -301,8 +296,8 @@ dmvio::CoarseIMULogic::computeCoarseUpdate(const dso::Mat88& H_in, const dso::Ve
     transformIMUToCoarse.updateWithValues(*coarseValues); // Set reference pose.
     // Convert Hessian and b to absolute poses.
     auto dsoHAndB = convertCoarseHToGTSAM(transformIMUToCoarse, H_in * imuSettings.setting_weightDSOCoarse,
-                                          b_in * imuSettings.setting_weightDSOCoarse,
-                                          coarseValues->at<gtsam::Pose3>(currentPoseKey));
+        b_in * imuSettings.setting_weightDSOCoarse,
+        coarseValues->at<gtsam::Pose3>(currentPoseKey));
 
     // Linearize factor graph.
     gtsam::GaussianFactorGraph::shared_ptr gfg = coarseGraph->linearize(*coarseValues);
@@ -326,7 +321,8 @@ dmvio::CoarseIMULogic::computeCoarseUpdate(const dso::Mat88& H_in, const dso::Ve
     bComplete.segment(0, 14) += dsoHAndB.second;
 
     // Use lambda multiplication...
-    for(int i = 0; i < nrowsGT + 2; i++) HComplete(i, i) *= (1 + lambda);
+    for (int i = 0; i < nrowsGT + 2; i++)
+        HComplete(i, i) *= (1 + lambda);
 
     // --------------------------------------------------
     // Compute update step
@@ -335,8 +331,7 @@ dmvio::CoarseIMULogic::computeCoarseUpdate(const dso::Mat88& H_in, const dso::Ve
 
     inc *= extrapFac;
 
-    if(imuSettings.fixKeyframeDuringCoarseTracking)
-    {
+    if (imuSettings.fixKeyframeDuringCoarseTracking) {
         // GTSAM Pose contains first rotation, then translation -> only remove the translational part.
         inc.segment(5, 3) = gtsam::zeros(3, 1);
     }
@@ -344,8 +339,7 @@ dmvio::CoarseIMULogic::computeCoarseUpdate(const dso::Mat88& H_in, const dso::Ve
     // Apply update.
     newCoarseValues.reset(new gtsam::Values());
     int current_pos = 2;
-    for(size_t i = 0; i < coarseOrdering.size(); i++)
-    {
+    for (size_t i = 0; i < coarseOrdering.size(); i++) {
         gtsam::Key k = coarseOrdering[i];
         size_t s = keyDimMap[k];
         newCoarseValues->insert(k, *(coarseValues->at(k).retract_(inc.segment(current_pos, s))));
@@ -359,10 +353,9 @@ dmvio::CoarseIMULogic::computeCoarseUpdate(const dso::Mat88& H_in, const dso::Ve
     incNorm = inc.norm();
     transformIMUToCoarse.updateWithValues(*newCoarseValues); // Set reference pose.
     Sophus::SE3d newReferenceToFrame(
-            transformIMUToCoarse.transformPose(newCoarseValues->at<gtsam::Pose3>(currentPoseKey).matrix()));
+        transformIMUToCoarse.transformPose(newCoarseValues->at<gtsam::Pose3>(currentPoseKey).matrix()));
 
     return newReferenceToFrame;
-
 }
 
 Sophus::SE3d dmvio::CoarseIMULogic::getCoarseKFPose()
@@ -389,13 +382,14 @@ void dmvio::CoarseIMULogic::acceptCoarseUpdate()
 // Our factor graph contains (and marginalizes old frames), so we need to add the linearized direct image alignment factor.
 void dmvio::CoarseIMULogic::addVisualToCoarseGraph(const dso::Mat88& H, const dso::Vec8& b, bool trackingIsGood)
 {
-    if(!imuSettings.addVisualToCoarseGraphIfTrackingBad && !trackingIsGood) return;
+    if (!imuSettings.addVisualToCoarseGraphIfTrackingBad && !trackingIsGood)
+        return;
 
     PoseTransformation& transformIMUToCoarse = *transformIMUToDSOForCoarse;
     transformIMUToCoarse.updateWithValues(*coarseValues); // Set reference pose.
     auto dsoHAndB = convertCoarseHToGTSAM(transformIMUToCoarse, H * imuSettings.setting_weightDSOCoarse,
-                                          b * imuSettings.setting_weightDSOCoarse,
-                                          coarseValues->at<gtsam::Pose3>(currentPoseKey));
+        b * imuSettings.setting_weightDSOCoarse,
+        coarseValues->at<gtsam::Pose3>(currentPoseKey));
     gtsam::Matrix HFull = std::move(dsoHAndB.first);
     gtsam::Vector bFull = std::move(dsoHAndB.second);
 
@@ -415,9 +409,9 @@ void dmvio::CoarseIMULogic::addVisualToCoarseGraph(const dso::Mat88& H, const ds
     gtsam::Vector baNew = ba - Hma.transpose() * HmmInv * bm;
 
     gtsam::LinearContainerFactor::shared_ptr lcf(new gtsam::LinearContainerFactor(
-            gtsam::HessianFactor(refPoseKey, currentPoseKey, HaaNew.block(0, 0, 6, 6), HaaNew.block(0, 6, 6, 6),
-                                 baNew.segment(0, 6), HaaNew.block(6, 6, 6, 6), baNew.segment(6, 6), 0),
-            *coarseValues));
+        gtsam::HessianFactor(refPoseKey, currentPoseKey, HaaNew.block(0, 0, 6, 6), HaaNew.block(0, 6, 6, 6),
+            baNew.segment(0, 6), HaaNew.block(6, 6, 6, 6), baNew.segment(6, 6), 0),
+        *coarseValues));
 
     coarseGraph->add(lcf);
 }
@@ -425,8 +419,7 @@ void dmvio::CoarseIMULogic::addVisualToCoarseGraph(const dso::Mat88& H, const ds
 gtsam::imuBias::ConstantBias dmvio::CoarseIMULogic::getBias(int frameId)
 {
     gtsam::imuBias::ConstantBias currentBias;
-    if(coarseValues)
-    {
+    if (coarseValues) {
         currentBias = coarseValues->at<gtsam::imuBias::ConstantBias>(gtsam::Symbol('b', frameId));
     }
     return currentBias;
@@ -435,20 +428,17 @@ gtsam::imuBias::ConstantBias dmvio::CoarseIMULogic::getBias(int frameId)
 gtsam::Vector3 dmvio::CoarseIMULogic::getVelocity(int frameId)
 {
     gtsam::Vector3 velocity = gtsam::Vector3::Identity();
-    if(coarseValues)
-    {
+    if (coarseValues) {
         velocity = coarseValues->at<gtsam::Vector3>(gtsam::Symbol('v', frameId));
     }
     return velocity;
 }
 
-
 void dmvio::CoarseIMULogic::printCoarseBiases(const dmvio::GTData* gtData, int frameId)
 {
-    if(gtData && coarseValues)
-    {
+    if (gtData && coarseValues) {
         gtsam::imuBias::ConstantBias currentBias = coarseValues->at<gtsam::imuBias::ConstantBias>(
-                gtsam::Symbol('b', frameId));
+            gtsam::Symbol('b', frameId));
         Eigen::Vector3d gtTrans = gtData->biasTranslation;
         Eigen::Vector3d gtRot = gtData->biasRotation;
         Eigen::Vector3d errorTrans = currentBias.accelerometer() - gtTrans;
@@ -464,4 +454,3 @@ double dmvio::CoarseIMULogic::getScale() const
 {
     return scale;
 }
-

@@ -52,7 +52,7 @@ public:
     Vec2f energy_new; //!< 迭代计算的新的能量
 
     float iR; // 逆深度的期望值
-    float iRSumNum;
+    float iRSumNum; //!< 子点逆深度信息矩阵之和
 
     float lastHessian; // 逆深度的Hessian, 即协方差, dd*dd
     float lastHessian_new;
@@ -85,8 +85,8 @@ public:
     bool fixAffine;
     bool printDebug;
 
-    Pnt* points[PYR_LEVELS];
-    int numPoints[PYR_LEVELS];
+    Pnt* points[PYR_LEVELS]; //!< 每一层的点的信息
+    int numPoints[PYR_LEVELS]; //!< 每一层的点数目
     AffLight thisToNext_aff;
     SE3 thisToNext;
 
@@ -108,8 +108,8 @@ private:
     int h[PYR_LEVELS];
     void makeK(CalibHessian* HCalib);
 
-    bool snapped;
-    int snappedAt;
+    bool snapped; // 判断是否可以进行初始化(or判断帧间位移是否足够)
+    int snappedAt; // 位移足够对应帧的id
 
     // pyramid images & levels on all levels
     Eigen::Vector3f* dINew[PYR_LEVELS];
@@ -121,13 +121,13 @@ private:
     Vec10f* JbBuffer; // 0-7: sum(dd * dp). 8: sum(res*dd). 9: 1/(1+sum(dd*dd))=inverse hessian entry.
     Vec10f* JbBuffer_new;
 
-	//* 9维向量, 乘积获得9*9矩阵, 并做的累加器
-    Accumulator9 acc9;//!< Hessian 矩阵
-    Accumulator9 acc9SC;	//!< Schur部分Hessian
+    //* 9维向量, 乘积获得9*9矩阵, 并做的累加器
+    Accumulator9 acc9; //!< Hessian 矩阵
+    Accumulator9 acc9SC; //!< Schur部分Hessian
 
-    Vec3f dGrads[PYR_LEVELS];
+    // Vec3f dGrads[PYR_LEVELS];
 
-    float alphaK;
+    float alphaK; // 应该是定义了能够初始化的每个点的平均最小位移的平方(2.5*2.5)
     float alphaW;
     float regWeight;
     float couplingWeight;

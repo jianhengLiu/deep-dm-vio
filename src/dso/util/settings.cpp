@@ -166,7 +166,7 @@ float setting_coarseCutoffTH = 20;
 // parameters controlling pixel selection
 float setting_minGradHistCut = 0.5;
 float setting_minGradHistAdd = 7;
-float setting_gradDownweightPerLevel = 0.75;
+float setting_gradDownweightPerLevel = 0.75;// 每一层阈值的降低系数
 bool  setting_selectDirectionDistribution = true;
 
 

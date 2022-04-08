@@ -1117,11 +1117,12 @@ public:
     inline void finish()
     {
         H.setZero();
-        shiftUp(true);
+        shiftUp(true); // 强制进位到m
         assert(numIn1 == 0);
         assert(numIn1k == 0);
 
         int idx = 0;
+        //* H矩阵是对称的, 只有45个数值
         for (int r = 0; r < 9; r++)
             for (int c = r; c < 9; c++) {
                 float d = SSEData1m[idx + 0] + SSEData1m[idx + 1] + SSEData1m[idx + 2] + SSEData1m[idx + 3];
@@ -1141,6 +1142,7 @@ public:
         const __m128 J8)
     {
         float* pt = SSEData;
+        // pt += J0^t*J0
         _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J0)));
         pt += 4;
         _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J1)));
@@ -1245,6 +1247,7 @@ public:
         shiftUp(false);
     }
 
+    // 带权重的9维向量得到9*9矩阵
     inline void updateSSE_eighted(
         const __m128 J0, const __m128 J1,
         const __m128 J2, const __m128 J3,
@@ -1608,9 +1611,12 @@ private:
     EIGEN_ALIGN16 float SSEData1m[4 * 45];
     float numIn1, numIn1k, numIn1m;
 
+    //* 进位
     void shiftUp(bool force)
     {
-        if (numIn1 > 1000 || force) {
+        // 大于1000, 相加则进位到 k
+        if (numIn1 > 1000 || force) //? 为啥1000次就要进位, 答: 只要不超过128位就行, 一个大概的数, 1000个32位的相加, 肯定超不了
+        {
             for (int i = 0; i < 45; i++)
                 _mm_store_ps(SSEData1k + 4 * i, _mm_add_ps(_mm_load_ps(SSEData + 4 * i), _mm_load_ps(SSEData1k + 4 * i)));
             numIn1k += numIn1;

@@ -1,3 +1,10 @@
+/*
+ * @Author: Jianheng Liu
+ * @Date: 2022-04-02 17:18:26
+ * @LastEditors: Jianheng Liu
+ * @LastEditTime: 2022-04-07 14:13:35
+ * @Description: Description
+ */
 /**
 * This file is part of DM-VIO.
 *
@@ -38,6 +45,14 @@ gtsam::Matrix augmentedHessianFromPair(const std::pair<gtsam::Matrix, gtsam::Vec
 void removeKeysFromGraph(gtsam::NonlinearFactorGraph& graph, const std::set<gtsam::Key>& keysToRemove,
                          int stopAfterNoRemoval = -1);
 
+/**
+ * @brief 更新values中key的value,若无则插入key
+ * 
+ * @tparam T 
+ * @param values 
+ * @param key 
+ * @param value 
+ */
 template<typename T> void eraseAndInsert(gtsam::Values& values, gtsam::Key key, const T& value)
 {
     if(values.exists(key))
@@ -49,6 +64,14 @@ template<typename T> void eraseAndInsert(gtsam::Values& values, gtsam::Key key, 
     }
 }
 
+/**
+ * @brief 更新values中key的value,若无则插入key
+ * 
+ * @tparam T 
+ * @param values 
+ * @param key 
+ * @param value 
+ */
 template<typename T> void eraseAndInsert(gtsam::Values::shared_ptr values, gtsam::Key key, const T& value)
 {
     eraseAndInsert(*values, key, value);

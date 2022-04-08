@@ -1,14 +1,13 @@
 /*
  * @Author: Jianheng Liu
- * @Date: 2022-04-01 14:52:31
+ * @Date: 2022-04-02 17:18:27
  * @LastEditors: Jianheng Liu
- * @LastEditTime: 2022-04-02 11:07:12
+ * @LastEditTime: 2022-04-07 10:07:40
  * @Description: Description
  */
 /**
  * This file is part of DSO, written by Jakob Engel.
- * It has been modified by Lukas von Stumberg for the inclusion in DM-VIO
- * (http://vision.in.tum.de/dm-vio).
+ * It has been modified by Lukas von Stumberg for the inclusion in DM-VIO (http://vision.in.tum.de/dm-vio).
  *
  * Copyright 2022 Lukas von Stumberg <lukas dot stumberg at tum dot de>
  * Copyright 2016 Technical University of Munich and Intel.
@@ -45,44 +44,44 @@ namespace dso {
  */
 class FrameShell {
 public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
-  int id;           // INTERNAL ID, starting at zero.
-  int incoming_id;  // ID passed into DSO
-  double timestamp; // timestamp passed into DSO.
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+    int id; // INTERNAL ID, starting at zero.
+    int incoming_id; // ID passed into DSO
+    double timestamp; // timestamp passed into DSO.
 
-  // set once after tracking
-  SE3 camToTrackingRef;
-  FrameShell *trackingRef;
+    // set once after tracking
+    SE3 camToTrackingRef; //相对位姿变换?
+    FrameShell* trackingRef;
 
-  // constantly adapted.
-  SE3 camToWorld; // Write: TRACKING, while frame is still fresh; MAPPING: only
-                  // when locked [shellPoseMutex].
-  AffLight aff_g2l;
-  bool poseValid;
-  bool trackingWasGood;
+    // constantly adapted.
+    SE3 camToWorld; // Write: TRACKING, while frame is still fresh; MAPPING: only when locked [shellPoseMutex].
+    AffLight aff_g2l;
+    bool poseValid;
+    bool trackingWasGood;
 
-  int keyframeId = -1; // Id of the KF or -1 for non-KFs.
+    int keyframeId = -1; // Id of the KF or -1 for non-KFs.
 
-  // statisitcs
-  int statistics_outlierResOnThis;
-  int statistics_goodResOnThis;
-  int marginalizedAt; //!< 被边缘化时最新关键帧的id
-  double movedByOpt; //!< 边缘化时得到的距离线性化点位姿的6维模
+    // statisitcs
+    int statistics_outlierResOnThis;
+    int statistics_goodResOnThis;
+    int marginalizedAt; //!< 被边缘化时最新关键帧的id
+    double movedByOpt; //!< 边缘化时得到的距离线性化点位姿的6维模
 
-  static boost::mutex shellPoseMutex;
+    static boost::mutex shellPoseMutex;
 
-  inline FrameShell() {
-    id = 0;
-    poseValid = true;
-    trackingWasGood = true;
-    camToWorld = SE3();
-    timestamp = 0;
-    marginalizedAt = -1;
-    movedByOpt = 0;
-    statistics_outlierResOnThis = statistics_goodResOnThis = 0;
-    trackingRef = 0;
-    camToTrackingRef = SE3();
-  }
+    inline FrameShell()
+    {
+        id = 0;
+        poseValid = true;
+        trackingWasGood = true;
+        camToWorld = SE3();
+        timestamp = 0;
+        marginalizedAt = -1;
+        movedByOpt = 0;
+        statistics_outlierResOnThis = statistics_goodResOnThis = 0;
+        trackingRef = 0;
+        camToTrackingRef = SE3();
+    }
 };
 
-} // namespace dso
+}
