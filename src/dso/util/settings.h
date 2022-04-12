@@ -180,6 +180,7 @@ extern bool setting_render_display3D;
 extern bool setting_render_displayResidual;
 extern bool setting_render_displayVideo;
 extern bool setting_render_displayDepth;
+extern bool setting_render_displayFeature;
 
 extern bool setting_fullResetRequested;
 

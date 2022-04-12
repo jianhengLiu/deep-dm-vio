@@ -22,6 +22,7 @@
  */
 
 #include "FullSystem/HessianBlocks.h"
+#include "Eigen/src/Core/Matrix.h"
 #include "FullSystem/ImmaturePoint.h"
 #include "OptimizationBackend/EnergyFunctionalStructs.h"
 #include "util/FrameShell.h"
@@ -140,6 +141,77 @@ void FrameHessian::makeImages(float* color, CalibHessian* HCalib)
     int h = hG[0]; // 零层height
     for (int i = 0; i < w * h; i++)
         dI[i][0] = color[i]; // [0]保存灰度值
+
+    for (int lvl = 0; lvl < pyrLevelsUsed; lvl++) {
+        int wl = wG[lvl], hl = hG[lvl];
+        Eigen::Vector3f* dI_l = dIp[lvl];
+
+        float* dabs_l = absSquaredGrad[lvl];
+
+        // 构建图像金字塔
+        if (lvl > 0) {
+            int lvlm1 = lvl - 1;
+            int wlm1 = wG[lvlm1]; // 上一层的width
+            Eigen::Vector3f* dI_lm = dIp[lvlm1];
+
+            // 4->1, average (pooling) (2,2)
+            for (int y = 0; y < hl; y++)
+                for (int x = 0; x < wl; x++) {
+                    dI_l[x + y * wl][0] = 0.25f * (dI_lm[2 * x + 2 * y * wlm1][0] + dI_lm[2 * x + 1 + 2 * y * wlm1][0] + dI_lm[2 * x + 2 * y * wlm1 + wlm1][0] + dI_lm[2 * x + 1 + 2 * y * wlm1 + wlm1][0]);
+                }
+        }
+        // 计算梯度幅值(使用平方和来表示)，不做padding，忽略最外的行和列
+        for (int idx = wl; idx < wl * (hl - 1); idx++) {
+            float dx = 0.5f * (dI_l[idx + 1][0] - dI_l[idx - 1][0]);
+            float dy = 0.5f * (dI_l[idx + wl][0] - dI_l[idx - wl][0]);
+
+            if (!std::isfinite(dx))
+                dx = 0;
+            if (!std::isfinite(dy))
+                dy = 0;
+
+            dI_l[idx][1] = dx;
+            dI_l[idx][2] = dy;
+
+            dabs_l[idx] = dx * dx + dy * dy;
+
+            // TODO: 光参
+            if (setting_gammaWeightsPixelSelect == 1 && HCalib != 0) {
+                float gw = HCalib->getBGradOnly((float)(dI_l[idx][0])); // 返回1?
+                dabs_l[idx] *= gw * gw; // convert to gradient of original color space (before removing response).// 我不理解
+            }
+        }
+    }
+}
+
+//* 计算各层金字塔图像的像素值和梯度
+/**
+ * @brief 获取和计算各层金字塔图像dI/dIp[0]和梯度dI/dIp[1][2]，梯度平方和:fh->absSquaredGrad
+ *
+ * @param color
+ * @param HCalib
+ */
+void FrameHessian::makeFeatureImages(float* color, float* feature, CalibHessian* HCalib)
+{
+    // 每一层创建图像值, 和图像梯度的存储空间
+    for (int i = 0; i < pyrLevelsUsed; i++) {
+        dIp[i] = new Eigen::Vector3f[wG[i] * hG[i]];
+        absSquaredGrad[i] = new float[wG[i] * hG[i]];
+    }
+    dI = dIp[0];
+
+    // 取出最底层图像(原图分辨率)
+    // make d0
+    int w = wG[0]; // 零层width
+    int h = hG[0]; // 零层height
+    for (int i = 0; i < w * h; i++) {
+        dI[i][0] = color[i]; // [0]保存灰度值
+    }
+    // 创建feature空间
+    dFeatureI = new Eigen::Vector3f[w * h];
+    for (int i = 0; i < w * h; i++) {
+        dFeatureI[i][0] = feature[i]; // [0]保存灰度值
+    }
 
     for (int lvl = 0; lvl < pyrLevelsUsed; lvl++) {
         int wl = wG[lvl], hl = hG[lvl];

@@ -31,6 +31,7 @@
 #include "FullSystem/ImmaturePoint.h"
 #include "util/globalCalib.h"
 #include "util/settings.h"
+#include <opencv2/imgcodecs.hpp>
 
 namespace dso {
 namespace IOWrap {
@@ -48,11 +49,13 @@ namespace IOWrap {
             internalVideoImg = new MinimalImageB3(w, h);
             internalKFImg = new MinimalImageB3(w, h);
             internalResImg = new MinimalImageB3(w, h);
-            videoImgChanged = kfImgChanged = resImgChanged = true;
+            internalFeatureImg = new MinimalImageB3(w, h);
+            videoImgChanged = kfImgChanged = resImgChanged = featureImgChanged = true;
 
             internalVideoImg->setBlack();
             internalKFImg->setBlack();
             internalResImg->setBlack();
+            internalFeatureImg->setBlack();
         }
 
         {
@@ -101,16 +104,23 @@ namespace IOWrap {
         pangolin::View& d_residual = pangolin::Display("imgResidual")
                                          .SetAspect(w / (float)h);
 
+        pangolin::View& d_feature = pangolin::Display("imgFeature")
+                                        .SetAspect(w / (float)h);
+
+        // 创建glTexture容器用于读取图像
         pangolin::GlTexture texKFDepth(w, h, GL_RGB, false, 0, GL_RGB, GL_UNSIGNED_BYTE);
         pangolin::GlTexture texVideo(w, h, GL_RGB, false, 0, GL_RGB, GL_UNSIGNED_BYTE);
         pangolin::GlTexture texResidual(w, h, GL_RGB, false, 0, GL_RGB, GL_UNSIGNED_BYTE);
+        pangolin::GlTexture texFeature(w, h, GL_RGB, false, 0, GL_RGB, GL_UNSIGNED_BYTE);
 
+        // 创建交互视图
         pangolin::CreateDisplay()
             .SetBounds(0.0, 0.3, pangolin::Attach::Pix(UI_WIDTH), 1.0)
             .SetLayout(pangolin::LayoutEqual)
             .AddDisplay(d_kfDepth)
             .AddDisplay(d_video)
-            .AddDisplay(d_residual);
+            .AddDisplay(d_residual)
+            .AddDisplay(d_feature);
 
         // parameter reconfigure gui
         pangolin::CreatePanel("ui").SetBounds(0.0, 1.0, 0.0, pangolin::Attach::Pix(UI_WIDTH));
@@ -128,6 +138,7 @@ namespace IOWrap {
         pangolin::Var<bool> settings_showLiveDepth("ui.showDepth", true, true);
         pangolin::Var<bool> settings_showLiveVideo("ui.showVideo", true, true);
         pangolin::Var<bool> settings_showLiveResidual("ui.showResidual", false, true);
+        pangolin::Var<bool> settings_showLiveFeature("ui.showFeature", true, true);
 
         pangolin::Var<bool> settings_showFramesWindow("ui.showFramesWindow", false, true);
         pangolin::Var<bool> settings_showFullTracking("ui.showFullTracking", false, true);
@@ -186,11 +197,17 @@ namespace IOWrap {
             openImagesMutex.lock();
             if (videoImgChanged)
                 texVideo.Upload(internalVideoImg->data, GL_BGR, GL_UNSIGNED_BYTE);
+            if (featureImgChanged) {
+                // cv::Mat m = cv::imread("/home/innox/datasets/V2_03_difficult/mav0/cam0/data/1413394881555760384.png", cv::IMREAD_COLOR);
+                // // m.convertTo(m, CV_8UC3);
+                // texFeature.Upload(m.data, GL_BGR, GL_UNSIGNED_BYTE);
+                texFeature.Upload(internalFeatureImg->data, GL_BGR, GL_UNSIGNED_BYTE);
+            }
             if (kfImgChanged)
                 texKFDepth.Upload(internalKFImg->data, GL_BGR, GL_UNSIGNED_BYTE);
             if (resImgChanged)
                 texResidual.Upload(internalResImg->data, GL_BGR, GL_UNSIGNED_BYTE);
-            videoImgChanged = kfImgChanged = resImgChanged = false;
+            featureImgChanged = videoImgChanged = kfImgChanged = resImgChanged = false;
             openImagesMutex.unlock();
 
             // update fps counters
@@ -228,6 +245,11 @@ namespace IOWrap {
                 glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
                 texResidual.RenderToViewportFlipY(); // 需要反转Y轴，否则输出是倒着的
             }
+            if (settings_showLiveFeature) {
+                d_feature.Activate();
+                glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+                texFeature.RenderToViewportFlipY(); // 需要反转Y轴，否则输出是倒着的
+            }
 
             // update parameters
             this->settings_pointCloudMode = settings_pointCloudMode.Get();
@@ -243,6 +265,7 @@ namespace IOWrap {
             setting_render_displayDepth = settings_showLiveDepth.Get();
             setting_render_displayVideo = settings_showLiveVideo.Get();
             setting_render_displayResidual = settings_showLiveResidual.Get();
+            setting_render_displayFeature = settings_showLiveFeature.Get();
 
             setting_render_renderWindowFrames = settings_showFramesWindow.Get();
             setting_render_plotTrackingFull = settings_showFullTracking.Get();
@@ -317,7 +340,7 @@ namespace IOWrap {
         internalVideoImg->setBlack();
         internalKFImg->setBlack();
         internalResImg->setBlack();
-        videoImgChanged = kfImgChanged = resImgChanged = true;
+        featureImgChanged = videoImgChanged = kfImgChanged = resImgChanged = true;
         openImagesMutex.unlock();
 
         needReset = false;
@@ -494,10 +517,30 @@ namespace IOWrap {
 
         boost::unique_lock<boost::mutex> lk(openImagesMutex);
 
-        for (int i = 0; i < w * h; i++)
+        for (int i = 0; i < w * h; i++) {
             internalVideoImg->data[i][0] = internalVideoImg->data[i][1] = internalVideoImg->data[i][2] = image->dI[i][0] * 0.8 > 255.0f ? 255.0 : image->dI[i][0] * 0.8;
+        }
 
         videoImgChanged = true;
+    }
+
+    void PangolinDSOViewer::pushLiveFeatureFrame(FrameHessian* image)
+    {
+        if (!setting_render_displayFeature)
+            return;
+        if (disableAllDisplay)
+            return;
+
+        boost::unique_lock<boost::mutex> lk(openImagesMutex);
+
+        for (int i = 0; i < w * h; i++) {
+            if (image->dFeatureI[i][0] > 0) {
+                internalFeatureImg->data[i][0] = internalFeatureImg->data[i][1] = internalFeatureImg->data[i][2] = image->dFeatureI[i][0] * 150 > 255.0f ? 255.0 : image->dFeatureI[i][0] * 150;
+            } else
+                internalFeatureImg->data[i][0] = internalFeatureImg->data[i][1] = internalFeatureImg->data[i][2] = 0;
+        }
+
+        featureImgChanged = true;
     }
 
     bool PangolinDSOViewer::needPushDepthImage()

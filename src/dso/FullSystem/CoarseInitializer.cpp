@@ -92,8 +92,10 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 
     //[ ***step 1*** ] 先显示新来的帧
     // 新的一帧, 在跟踪之前显示的
-    for (IOWrap::Output3DWrapper* ow : wraps)
+    for (IOWrap::Output3DWrapper* ow : wraps) {
         ow->pushLiveFrame(newFrameHessian);
+        ow->pushLiveFeatureFrame(newFrameHessian);
+    }
 
     int maxIterations[] = { 5, 5, 10, 30, 50 };
 

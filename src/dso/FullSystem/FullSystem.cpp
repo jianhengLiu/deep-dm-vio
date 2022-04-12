@@ -275,7 +275,7 @@ void FullSystem::printResult(std::string file, bool onlyLogKFPoses, bool saveMet
             camToFirst = Sophus::SE3d(imuIntegration.getTransformDSOToIMU().transformPose(camToWorld.inverse().matrix()));
         }
 
-        myfile << s->timestamp << " " << camToFirst.translation().transpose() << " " << camToFirst.so3().unit_quaternion().x() << " " << camToFirst.so3().unit_quaternion().y() << " " << camToFirst.so3().unit_quaternion().z() << " " << camToFirst.unit_quaternion().w() << "\n";
+        myfile << s->timestamp << " " << camToFirst.translation().x() << " " << camToFirst.translation().y() << " " << camToFirst.translation().z() << " " << camToFirst.so3().unit_quaternion().x() << " " << camToFirst.so3().unit_quaternion().y() << " " << camToFirst.so3().unit_quaternion().z() << " " << camToFirst.so3().unit_quaternion().w() << "\n";
     }
     myfile.close();
 }
@@ -293,8 +293,10 @@ std::pair<Vec4, bool> FullSystem::trackNewCoarse(FrameHessian* fh, Sophus::SE3* 
     assert(!allFrameHistory.empty());
     // set pose initialization.
 
-    for (IOWrap::Output3DWrapper* ow : outputWrapper)
+    for (IOWrap::Output3DWrapper* ow : outputWrapper) {
         ow->pushLiveFrame(fh);
+        ow->pushLiveFeatureFrame(fh);
+    }
 
     FrameHessian* lastF = coarseTracker->lastRef; // 参考帧
 
@@ -1064,6 +1066,255 @@ void FullSystem::addActiveFrame(ImageAndExposure* image, int id, dmvio::IMUData*
         return;
     }
 }
+
+// The function is passed the IMU-data from the previous frame until the current frame.
+void FullSystem::addActiveFrame(ImageAndExposure* image, ImageAndExposure* featureImage, int id, dmvio::IMUData* imuData, dmvio::GTData* gtData)
+{
+    // Measure Time of the time measurement.
+    // TODO:下面这两个测试时间的可以删除?
+    // 用来在记录类TimeMeasurement的耗时
+    // {
+    //   dmvio::TimeMeasurement timeMeasurementMeasurement("timeMeasurement");
+    //   dmvio::TimeMeasurement timeMeasurementZero("zero");
+    //   timeMeasurementZero.end();
+    //   timeMeasurementMeasurement.end();
+    // }
+
+    dmvio::TimeMeasurement timeMeasurement("addActiveFrame");
+    boost::unique_lock<boost::mutex> lock(trackMutex);
+
+    dmvio::TimeMeasurement measureInit("initObjectsAndMakeImage");
+
+    //[ ***step 2*** ] 创建FrameHessian和FrameShell, 并进行相应初始化,
+    //并存储所有帧
+    // =========================== add into allFrameHistory =========================
+    FrameHessian* fh = new FrameHessian();
+    FrameShell* shell = new FrameShell();
+    shell->camToWorld = SE3(); // no lock required, as fh is not used anywhere yet.
+    shell->aff_g2l = AffLight(0, 0); // TODO: 光参
+    shell->marginalizedAt = shell->id = allFrameHistory.size(); // 帧id
+    shell->timestamp = image->timestamp;
+    shell->incoming_id = id; // 记录进来图片在对应序列的id，仅用于信息输出；TODO:可以删除
+    fh->shell = shell;
+    allFrameHistory.push_back(shell);
+
+    //[ ***step 3*** ] 得到曝光时间, 生成金字塔, 计算整个图像梯度
+    // =========================== make Images / derivatives etc.
+    // =========================
+    // TODO: 无需曝光时间
+    fh->ab_exposure = image->exposure_time;
+    // 计算各层金字塔图像的L2梯度,保存在:fh->absSquaredGrad
+    // fh->makeImages(image->image, &Hcalib);
+    fh->makeFeatureImages(image->image, featureImage->image, &Hcalib);
+
+    measureInit.end();
+
+    //[ ***step 4*** ] 进行初始化
+    if (!initialized) {
+        // use initializer!
+        //[ ***step 4.1*** ] 加入第一帧
+        if (coarseInitializer->frameID < 0) // first frame set. fh is kept by coarseInitializer.
+        {
+            // Only in this case no IMU-data is accumulated for the BA as this is the first frame.
+            dmvio::TimeMeasurement initMeasure("InitializerFirstFrame");
+            coarseInitializer->setFirst(&Hcalib, fh);
+            if (setting_useIMU) {
+                gravityInit.addMeasure(*imuData);
+            }
+        } else {
+            dmvio::TimeMeasurement initMeasure("InitializerOtherFrames");
+            bool initDone = coarseInitializer->trackFrame(fh, outputWrapper);
+            if (setting_useIMU) {
+                imuIntegration.addIMUDataToBA(*imuData);
+                Sophus::SE3 imuToWorld = gravityInit.addMeasure(*imuData);
+                if (initDone) {
+                    firstPose = imuToWorld * imuIntegration.TS_cam_imu.inverse();
+                }
+            }
+
+            //[ ***step 4.2*** ] 跟踪成功, 完成初始化
+            if (initDone) // if SNAPPED
+            {
+                initializeFromInitializer(fh);
+                // TODO:
+                if (setting_useIMU && linearizeOperation) {
+                    imuIntegration.setGTData(gtData, fh->shell->id);
+                }
+                lock.unlock();
+                initMeasure.end();
+                deliverTrackedFrame(fh, true);
+            } else {
+                // if still initializing
+
+                // Maybe change first frame.
+                double timeBetweenFrames = fh->shell->timestamp - coarseInitializer->firstFrame->shell->timestamp;
+                std::cout << "InitTimeBetweenFrames: " << timeBetweenFrames << std::endl;
+                if (timeBetweenFrames > imuIntegration.getImuSettings().maxTimeBetweenInitFrames) {
+                    // Make this the first frame.
+                    // delete old first frame
+                    coarseInitializer->firstFrame->shell->poseValid = false;
+                    delete coarseInitializer->firstFrame;
+
+                    // Clear frame history
+                    allFrameHistory.pop_back(); // Pop the current shell as we do not want to delete it.
+                    for (auto&& shell : allFrameHistory) {
+                        delete shell;
+                    }
+                    allFrameHistory.clear();
+
+                    // Set this to the first id again.
+                    shell->marginalizedAt = shell->id = allFrameHistory.size();
+                    allFrameHistory.push_back(shell);
+
+                    if (setting_useIMU)
+                        imuIntegration.resetBAPreintegration();
+
+                    coarseInitializer->setFirst(&Hcalib, fh);
+                } else {
+                    fh->shell->poseValid = false;
+                    delete fh;
+                }
+            }
+        }
+        return;
+    } else // do front-end operation.
+    {
+        //[ ***step 5*** ] 对新来的帧进行跟踪, 得到位姿光度, 判断跟踪状态
+        // --------------------------  Coarse tracking (after visual initializer succeeded). --------------------------
+        dmvio::TimeMeasurement coarseTrackingTime("fullCoarseTracking");
+        int lastFrameId = -1;
+
+        // =========================== SWAP tracking reference?. =========================
+        bool trackingRefChanged = false;
+        if (coarseTracker_forNewKF->refFrameID > coarseTracker->refFrameID) {
+            // 交换参考帧和当前帧的coarseTracker
+            dmvio::TimeMeasurement referenceSwapTime("swapTrackingRef");
+            boost::unique_lock<boost::mutex> crlock(coarseTrackerSwapMutex);
+            CoarseTracker* tmp = coarseTracker;
+            coarseTracker = coarseTracker_forNewKF;
+            coarseTracker_forNewKF = tmp;
+
+            if (dso::setting_useIMU) {
+                // BA for new keyframe has finished and we have a new tracking reference.
+                std::cout << "New ref frame id: " << coarseTracker->refFrameID << " prepared keyframe id: " << imuIntegration.getPreparedKeyframe() << std::endl;
+
+                lastFrameId = coarseTracker->refFrameID;
+
+                assert(coarseTracker->refFrameID == imuIntegration.getPreparedKeyframe());
+                SE3 lastRefToNewRef = imuIntegration.initCoarseGraph();
+
+                trackingRefChanged = true;
+            }
+        }
+
+        SE3* referenceToFramePassed = nullptr;
+        SE3 referenceToFrame;
+        if (dso::setting_useIMU) {
+            SE3 referenceToFrame = imuIntegration.addIMUData(*imuData, fh->shell->id,
+                fh->shell->timestamp, trackingRefChanged, lastFrameId);
+            // If initialized we use the prediction from IMU data as initialization for the coarse tracking.
+            referenceToFramePassed = &referenceToFrame;
+            if (!imuIntegration.isCoarseInitialized()) {
+                referenceToFramePassed = nullptr;
+            }
+            imuIntegration.addIMUDataToBA(*imuData);
+        }
+
+        std::pair<Vec4, bool> pair = trackNewCoarse(fh, referenceToFramePassed);
+        dso::Vec4 tres = std::move(pair.first);
+        bool forceNoKF = !pair.second; // If coarse tracking was bad don't make KF.
+        bool forceKF = false;
+        if (!std::isfinite((double)tres[0]) || !std::isfinite((double)tres[1]) || !std::isfinite((double)tres[2]) || !std::isfinite((double)tres[3])) {
+            if (setting_useIMU) {
+                // If completely Nan, don't force noKF!
+                forceNoKF = false;
+                forceKF = true; // actually we force a KF in that situation as there are no points to track.
+            } else {
+                printf("Initial Tracking failed: LOST!\n");
+                isLost = true;
+                return;
+            }
+        }
+
+        //[ ***step 6*** ] 判断是否插入关键帧
+        double timeSinceLastKeyframe = fh->shell->timestamp - allKeyFramesHistory.back()->timestamp;
+        bool needToMakeKF = false;
+        if (setting_keyframesPerSecond > 0) // 每隔多久插入关键帧
+        {
+            needToMakeKF = allFrameHistory.size() == 1 || (fh->shell->timestamp - allKeyFramesHistory.back()->timestamp) > 0.95f / setting_keyframesPerSecond;
+        } else {
+            // TODO: 不需要光度参数
+            Vec2 refToFh = AffLight::fromToVecExposure(coarseTracker->lastRef->ab_exposure, fh->ab_exposure,
+                coarseTracker->lastRef_aff_g2l, fh->shell->aff_g2l);
+
+            // BRIGHTNESS CHECK
+            needToMakeKF = allFrameHistory.size() == 1 || setting_kfGlobalWeight * setting_maxShiftWeightT * sqrtf((double)tres[1]) / (wG[0] + hG[0]) // 平移像素位移
+                        + setting_kfGlobalWeight * setting_maxShiftWeightR * sqrtf((double)tres[2]) / (wG[0] + hG[0]) // TODO 旋转像素位移, 设置为0???
+                        + setting_kfGlobalWeight * setting_maxShiftWeightRT * sqrtf((double)tres[3]) / (wG[0] + hG[0]) // 旋转+平移像素位移
+                        + setting_kfGlobalWeight * setting_maxAffineWeight * fabs(logf((float)refToFh[0]))
+                    > 1 //光度变化大，TODO:光度
+                || 2 * coarseTracker->firstCoarseRMSE < tres[0] // 误差能量变化太大(最初的两倍)
+                || (setting_maxTimeBetweenKeyframes > 0 && timeSinceLastKeyframe > setting_maxTimeBetweenKeyframes) // 关键帧间间隔时间大
+                || forceKF;
+
+            if (needToMakeKF) {
+                std::cout << "Time since last keyframe: " << timeSinceLastKeyframe << std::endl;
+            }
+        }
+        double transNorm = fh->shell->camToTrackingRef.translation().norm() * imuIntegration.getCoarseScale();
+        if (imuIntegration.isCoarseInitialized() && transNorm < setting_forceNoKFTranslationThresh) {
+            forceNoKF = true;
+        }
+        if (forceNoKF) {
+            std::cout << "Forcing NO KF!" << std::endl;
+            needToMakeKF = false;
+        }
+
+        if (needToMakeKF) {
+            int prevKFId = fh->shell->trackingRef->id;
+            // In non-RT mode this will always be accurate, but in RT mode the printout in makeKeyframe is correct (because some of these KFs do not end up getting created).
+            int framesBetweenKFs = fh->shell->id - prevKFId - 1; //间隔帧数
+
+            // Enforce setting_minFramesBetweenKeyframes.
+            // 在非RT模式下，来保证每帧都是关键帧？
+            if (framesBetweenKFs < (int)setting_minFramesBetweenKeyframes) // if integer value is smaller we just skip.
+            {
+                std::cout << "Skipping KF because of minFramesBetweenKeyframes." << std::endl;
+                needToMakeKF = false;
+            } else if (framesBetweenKFs < setting_minFramesBetweenKeyframes) // Enforce it for non-integer values.//我不理解,帧数还有是非整数的?
+            {
+                double fractionalPart = setting_minFramesBetweenKeyframes - (int)setting_minFramesBetweenKeyframes;
+                framesBetweenKFsRest += fractionalPart;
+                if (framesBetweenKFsRest >= 1.0) {
+                    std::cout << "Skipping KF because of minFramesBetweenKeyframes." << std::endl;
+                    needToMakeKF = false;
+                    framesBetweenKFsRest--;
+                }
+            }
+        }
+
+        if (setting_useIMU) {
+            imuIntegration.finishCoarseTracking(*(fh->shell), needToMakeKF);
+        }
+
+        if (needToMakeKF && setting_useIMU && linearizeOperation) {
+            imuIntegration.setGTData(gtData, fh->shell->id);
+        }
+
+        dmvio::TimeMeasurement timeLastStuff("afterCoarseTracking");
+
+        for (IOWrap::Output3DWrapper* ow : outputWrapper)
+            ow->publishCamPose(fh->shell, &Hcalib);
+
+        lock.unlock();
+        timeLastStuff.end();
+        coarseTrackingTime.end();
+        //[ ***step 7*** ] 把该帧发布出去
+        deliverTrackedFrame(fh, needToMakeKF);
+        return;
+    }
+}
+
 //@ 把跟踪的帧, 给到建图线程, 设置成关键帧或非关键帧
 void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 {

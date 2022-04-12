@@ -1,3 +1,10 @@
+/*
+ * @Author: Jianheng Liu
+ * @Date: 2022-04-02 17:18:27
+ * @LastEditors: Jianheng Liu
+ * @LastEditTime: 2022-04-11 15:54:02
+ * @Description: Description
+ */
 /**
 * This file is part of DSO.
 *
@@ -35,6 +42,7 @@ namespace IOWrap
 MinimalImageB* readImageBW_8U(std::string filename);
 MinimalImageB3* readImageRGB_8U(std::string filename);
 MinimalImage<unsigned short>* readImageBW_16U(std::string filename);
+MinimalImageB* readImageTIFF(std::string filename);
 
 
 MinimalImageB* readStreamBW_8U(char* data, int numBytes);

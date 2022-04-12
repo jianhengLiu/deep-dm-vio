@@ -1,138 +1,124 @@
 /**
-* This file is part of DSO, written by Jakob Engel.
-* It has been modified by Lukas von Stumberg for the inclusion in DM-VIO (http://vision.in.tum.de/dm-vio).
-*
-* Copyright 2022 Lukas von Stumberg <lukas dot stumberg at tum dot de>
-* Copyright 2016 Technical University of Munich and Intel.
-* Developed by Jakob Engel <engelj at in dot tum dot de>,
-* for more information see <http://vision.in.tum.de/dso>.
-* If you use this code, please cite the respective publications as
-* listed on the above website.
-*
-* DSO is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* DSO is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with DSO. If not, see <http://www.gnu.org/licenses/>.
-*/
-
-
-
+ * This file is part of DSO, written by Jakob Engel.
+ * It has been modified by Lukas von Stumberg for the inclusion in DM-VIO (http://vision.in.tum.de/dm-vio).
+ *
+ * Copyright 2022 Lukas von Stumberg <lukas dot stumberg at tum dot de>
+ * Copyright 2016 Technical University of Munich and Intel.
+ * Developed by Jakob Engel <engelj at in dot tum dot de>,
+ * for more information see <http://vision.in.tum.de/dso>.
+ * If you use this code, please cite the respective publications as
+ * listed on the above website.
+ *
+ * DSO is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * DSO is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with DSO. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #pragma once
-#include <vector>
 #include <string>
+#include <vector>
 
-#include "util/NumType.h"
-#include "util/MinimalImage.h"
 #include "map"
+#include "util/MinimalImage.h"
+#include "util/NumType.h"
 
 namespace cv {
-        class Mat;
+class Mat;
 }
 
-namespace dmvio
-{
+namespace dmvio {
 class TransformDSOToIMU;
 }
 
-namespace dso
-{
+namespace dso {
 
 class FrameHessian;
 class CalibHessian;
 class FrameShell;
 
-namespace IOWrap
-{
-/* ======================= Additional information for DM-VIO: ===============
- *
- * All poses published are still in DSO frame, that means they have an arbitrary scale instead of the metric scale.
- * If you are interested in metrically scaled poses you should additionally implement [publishTransformDSOToIMU]
- * It returns an object of type TransformDSOToIMU which can be used to transform poses from DSO frame to IMU frame
- * (with the method transformPose).
- * Note that you need to pass the method transformPose DSO poses in worldToCam, not camToWorld!
- *
- */
+namespace IOWrap {
+    /* ======================= Additional information for DM-VIO: ===============
+     *
+     * All poses published are still in DSO frame, that means they have an arbitrary scale instead of the metric scale.
+     * If you are interested in metrically scaled poses you should additionally implement [publishTransformDSOToIMU]
+     * It returns an object of type TransformDSOToIMU which can be used to transform poses from DSO frame to IMU frame
+     * (with the method transformPose).
+     * Note that you need to pass the method transformPose DSO poses in worldToCam, not camToWorld!
+     *
+     */
 
-/* ======================= Some typical usecases: ===============
- *
- * (1) always get the pose of the most recent frame:
- *     -> Implement [publishCamPose].
- *
- * (2) always get the depthmap of the most recent keyframe
- *     -> Implement [pushDepthImageFloat] (use inverse depth in [image], and pose / frame information from [KF]).
- *
- * (3) accumulate final model
- *     -> Implement [publishKeyframes] (skip for final!=false), and accumulate frames.
- *
- * (4) get evolving model in real-time
- *     -> Implement [publishKeyframes] (update all frames for final==false).
- *
- *
- *
- *
- * ==================== How to use the structs: ===================
- * [FrameShell]: minimal struct kept for each frame ever tracked.
- *      ->camToWorld = camera to world transformation
- *      ->poseValid = false if [camToWorld] is invalid (only happens for frames during initialization).
- *      ->trackingRef = Shell of the frame this frame was tracked on.
- *      ->id = ID of that frame, starting with 0 for the very first frame.
- *
- *      ->incoming_id = ID passed into [addActiveFrame( ImageAndExposure* image, int id )].
- *	->timestamp = timestamp passed into [addActiveFrame( ImageAndExposure* image, int id )] as image.timestamp.
- *
- * [FrameHessian]
- *      ->immaturePoints: contains points that have not been "activated" (they do however have a depth initialization).
- *      ->pointHessians: contains active points.
- *      ->pointHessiansMarginalized: contains marginalized points.
- *      ->pointHessiansOut: contains outlier points.
- *
- *      ->frameID: incremental ID for keyframes only.
- *      ->shell: corresponding [FrameShell] struct.
- *
- *
- * [CalibHessian]
- *      ->fxl(), fyl(), cxl(), cyl(): get optimized, most recent (pinhole) camera intrinsics.
- *
- *
- * [PointHessian]
- * 	->u,v: pixel-coordinates of point.
- *      ->idepth_scaled: inverse depth of point.
- *                       DO NOT USE [idepth], since it may be scaled with [SCALE_IDEPTH] ... however that is currently set to 1 so never mind.
- *      ->host: pointer to host-frame of point.
- *      ->status: current status of point (ACTIVE=0, INACTIVE, OUTLIER, OOB, MARGINALIZED)
- *      ->numGoodResiduals: number of non-outlier residuals supporting this point (approximate).
- *      ->maxRelBaseline: value roughly proportional to the relative baseline this point was observed with (0 = no baseline).
- *                        points for which this value is low are badly contrained.
- *      ->idepth_hessian: hessian value (inverse variance) of inverse depth.
- *
- * [ImmaturePoint]
- * 	->u,v: pixel-coordinates of point.
- *      ->idepth_min, idepth_max: the initialization sais that the inverse depth of this point is very likely
- *        between these two thresholds (their mean being the best guess)
- *      ->host: pointer to host-frame of point.
- */
+    /* ======================= Some typical usecases: ===============
+     *
+     * (1) always get the pose of the most recent frame:
+     *     -> Implement [publishCamPose].
+     *
+     * (2) always get the depthmap of the most recent keyframe
+     *     -> Implement [pushDepthImageFloat] (use inverse depth in [image], and pose / frame information from [KF]).
+     *
+     * (3) accumulate final model
+     *     -> Implement [publishKeyframes] (skip for final!=false), and accumulate frames.
+     *
+     * (4) get evolving model in real-time
+     *     -> Implement [publishKeyframes] (update all frames for final==false).
+     *
+     *
+     *
+     *
+     * ==================== How to use the structs: ===================
+     * [FrameShell]: minimal struct kept for each frame ever tracked.
+     *      ->camToWorld = camera to world transformation
+     *      ->poseValid = false if [camToWorld] is invalid (only happens for frames during initialization).
+     *      ->trackingRef = Shell of the frame this frame was tracked on.
+     *      ->id = ID of that frame, starting with 0 for the very first frame.
+     *
+     *      ->incoming_id = ID passed into [addActiveFrame( ImageAndExposure* image, int id )].
+     *	->timestamp = timestamp passed into [addActiveFrame( ImageAndExposure* image, int id )] as image.timestamp.
+     *
+     * [FrameHessian]
+     *      ->immaturePoints: contains points that have not been "activated" (they do however have a depth initialization).
+     *      ->pointHessians: contains active points.
+     *      ->pointHessiansMarginalized: contains marginalized points.
+     *      ->pointHessiansOut: contains outlier points.
+     *
+     *      ->frameID: incremental ID for keyframes only.
+     *      ->shell: corresponding [FrameShell] struct.
+     *
+     *
+     * [CalibHessian]
+     *      ->fxl(), fyl(), cxl(), cyl(): get optimized, most recent (pinhole) camera intrinsics.
+     *
+     *
+     * [PointHessian]
+     * 	->u,v: pixel-coordinates of point.
+     *      ->idepth_scaled: inverse depth of point.
+     *                       DO NOT USE [idepth], since it may be scaled with [SCALE_IDEPTH] ... however that is currently set to 1 so never mind.
+     *      ->host: pointer to host-frame of point.
+     *      ->status: current status of point (ACTIVE=0, INACTIVE, OUTLIER, OOB, MARGINALIZED)
+     *      ->numGoodResiduals: number of non-outlier residuals supporting this point (approximate).
+     *      ->maxRelBaseline: value roughly proportional to the relative baseline this point was observed with (0 = no baseline).
+     *                        points for which this value is low are badly contrained.
+     *      ->idepth_hessian: hessian value (inverse variance) of inverse depth.
+     *
+     * [ImmaturePoint]
+     * 	->u,v: pixel-coordinates of point.
+     *      ->idepth_min, idepth_max: the initialization sais that the inverse depth of this point is very likely
+     *        between these two thresholds (their mean being the best guess)
+     *      ->host: pointer to host-frame of point.
+     */
 
-
-
-
-
-
-
-class Output3DWrapper
-{
-public:
-        Output3DWrapper() {}
-        virtual ~Output3DWrapper() {}
-
+    class Output3DWrapper {
+    public:
+        Output3DWrapper() { }
+        virtual ~Output3DWrapper() { }
 
         /*
          * Usage:
@@ -143,8 +129,7 @@ public:
          * The caller can create copy however , preferable with the following constructor (as otherwise the shared_ptrs will be kept).
          * TransformDSOToIMU(TransformDSOToIMU& other, std::shared_ptr<bool> optScale, std::shared_ptr<bool> optGravity, std::shared_ptr<bool> optT_cam_imu);
          */
-        virtual void publishTransformDSOToIMU(const dmvio::TransformDSOToIMU& transformDSOToIMU) {}
-
+        virtual void publishTransformDSOToIMU(const dmvio::TransformDSOToIMU& transformDSOToIMU) { }
 
         /*  Usage:
          *  Called once after each new Keyframe is inserted & optimized.
@@ -156,11 +141,7 @@ public:
          *  Calling:
          *  Always called, no overhead if not used.
          */
-        virtual void publishGraph(const std::map<uint64_t,Eigen::Vector2i, std::less<uint64_t>, Eigen::aligned_allocator<std::pair<const uint64_t, Eigen::Vector2i> > > &connectivity) {}
-
-
-
-
+        virtual void publishGraph(const std::map<uint64_t, Eigen::Vector2i, std::less<uint64_t>, Eigen::aligned_allocator<std::pair<const uint64_t, Eigen::Vector2i>>>& connectivity) { }
 
         /* Usage:
          * Called after each new Keyframe is inserted & optimized, with all keyframes that were part of the active window during
@@ -175,11 +156,7 @@ public:
          * Calling:
          * Always called, negligible overhead if not used.
          */
-        virtual void publishKeyframes(std::vector<FrameHessian*> &frames, bool final, CalibHessian* HCalib) {}
-
-
-
-
+        virtual void publishKeyframes(std::vector<FrameHessian*>& frames, bool final, CalibHessian* HCalib) { }
 
         /* Usage:
          * Called once for each tracked frame, with the real-time, low-delay frame pose.
@@ -187,11 +164,7 @@ public:
          * Calling:
          * Always called, no overhead if not used.
          */
-        virtual void publishCamPose(FrameShell* frame, CalibHessian* HCalib) {}
-
-
-
-
+        virtual void publishCamPose(FrameShell* frame, CalibHessian* HCalib) { }
 
         /* Usage:
          * Called once for each new frame, before it is tracked (i.e., it doesn't have a pose yet).
@@ -199,10 +172,15 @@ public:
          * Calling:
          * Always called, no overhead if not used.
          */
-        virtual void pushLiveFrame(FrameHessian* image) {}
+        virtual void pushLiveFrame(FrameHessian* image) { }
 
-
-
+        /* Usage:
+         * Called once for each new frame, before it is tracked (i.e., it doesn't have a pose yet).
+         *
+         * Calling:
+         * Always called, no overhead if not used.
+         */
+        virtual void pushLiveFeatureFrame(FrameHessian* image) { }
 
         /* called once after a new keyframe is created, with the color-coded, forward-warped inverse depthmap for that keyframe,
          * which is used for initial alignment of future frames. Meant for visualization.
@@ -210,10 +188,8 @@ public:
          * Calling:
          * Needs to prepare the depth image, so it is only called if [needPushDepthImage()] returned true.
          */
-        virtual void pushDepthImage(MinimalImageB3* image) {}
-        virtual bool needPushDepthImage() {return false;}
-
-
+        virtual void pushDepthImage(MinimalImageB3* image) { }
+        virtual bool needPushDepthImage() { return false; }
 
         /* Usage:
          * called once after a new keyframe is created, with the forward-warped inverse depthmap for that keyframe.
@@ -222,17 +198,14 @@ public:
          * Calling:
          * Always called, almost no overhead if not used.
          */
-        virtual void pushDepthImageFloat(MinimalImageF* image, FrameHessian* KF ) {}
-
-
+        virtual void pushDepthImageFloat(MinimalImageF* image, FrameHessian* KF) { }
 
         /* call on finish */
-        virtual void join() {}
+        virtual void join() { }
 
         /* call on reset */
-        virtual void reset() {}
-
-};
+        virtual void reset() { }
+    };
 
 }
 }

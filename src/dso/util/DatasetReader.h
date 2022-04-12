@@ -32,9 +32,15 @@
 #include "util/GTData.hpp"
 
 #include <algorithm>
+#include <boost/smart_ptr/make_shared_object.hpp>
+#include <cstring>
 #include <dirent.h>
 #include <fstream>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgcodecs/imgcodecs_c.h>
 #include <sstream>
+#include <string>
 
 #include "IOWrapper/ImageRW.h"
 #include "util/Undistort.h"
@@ -51,11 +57,11 @@ inline int getdir(std::string dir, std::vector<std::string>& files)
 {
     DIR* dp;
     struct dirent* dirp;
-    if ((dp = opendir(dir.c_str())) == NULL) {
+    if ((dp = opendir(dir.c_str())) == nullptr) {
         return -1;
     }
 
-    while ((dirp = readdir(dp)) != NULL) {
+    while ((dirp = readdir(dp)) != nullptr) {
         std::string name = std::string(dirp->d_name);
 
         if (name != "." && name != "..")
@@ -67,9 +73,9 @@ inline int getdir(std::string dir, std::vector<std::string>& files)
 
     if (dir.at(dir.length() - 1) != '/')
         dir = dir + "/";
-    for (unsigned int i = 0; i < files.size(); i++) {
-        if (files[i].at(0) != '/')
-            files[i] = dir + files[i];
+    for (auto& file : files) {
+        if (file.at(0) != '/')
+            file = dir + file;
     }
 
     return files.size();
@@ -104,8 +110,8 @@ public:
         use16Bit = use16BitPassed;
 
 #if HAS_ZIPLIB
-        ziparchive = 0;
-        databuffer = 0;
+        ziparchive = nullptr;
+        databuffer = nullptr;
 #endif
 
         isZipped = (path.length() > 4 && path.substr(path.length() - 4) == ".zip");
@@ -126,17 +132,21 @@ public:
                 std::string nstr = std::string(name);
                 if (nstr == "." || nstr == "..")
                     continue;
-                files.push_back(name);
+                files.emplace_back(name);
             }
 
             printf("got %d entries and %d files!\n", numEntries, (int)files.size());
             std::sort(files.begin(), files.end());
+
 #else
             printf("ERROR: cannot read .zip archive, as compile without ziplib!\n");
             exit(1);
 #endif
-        } else
+        } else {
             getdir(path, files);
+            // 读取网络学习的feature map
+            getdir(path + "/../feat_fine", feature_files);
+        }
 
         undistort = Undistort::getUndistorterForFile(calibFile, gammaFile, vignetteFile);
 
@@ -148,6 +158,7 @@ public:
         // load timestamps if possible.
         loadTimestamps();
         printf("ImageFolderReader: got %d files in %s!\n", (int)files.size(), path.c_str());
+        printf("ImageFolderReader: got %d files in %s!\n", (int)feature_files.size(), (path + "/../feat_fine").c_str());
     }
     ~ImageFolderReader()
     {
@@ -222,7 +233,7 @@ public:
 
     ImageAndExposure* getFeatureImage(int id, bool forceLoadDirectly = false)
     {
-        return getImage_internal(id, 0);
+        return getFeatureImage_internal(id, 0);
     }
 
     inline float* getPhotometricGamma()
@@ -420,7 +431,7 @@ private:
             return IOWrap::readImageBW_8U(files[id]);
         } else {
 #if HAS_ZIPLIB
-            if (databuffer == 0)
+            if (databuffer == nullptr)
                 databuffer = new char[widthOrg * heightOrg * 6 + 10000];
             zip_file_t* fle = zip_fopen(ziparchive, files[id].c_str(), 0);
             long readbytes = zip_fread(fle, databuffer, (long)widthOrg * heightOrg * 6 + 10000);
@@ -467,6 +478,66 @@ private:
             delete minimg;
             return ret2;
         }
+    }
+
+    ImageAndExposure* getFeatureImage_internal(int id, int unused)
+    {
+        cv::Mat m = cv::imread(feature_files[id], cv::IMREAD_UNCHANGED);
+        // cv::imshow("m", m);
+        // cv::waitKey(1);
+        ImageAndExposure* result = new ImageAndExposure(m.cols, m.rows, (timestamps.size() == 0 ? 0.0 : timestamps[id]));
+
+        float* out_data = result->image; // 复制的图像做输出
+        float* in_data = undistort->photometricUndist->output->image;
+
+        // float* in_data;
+        // in_data = new float[m.cols * m.rows];
+
+        // int n = 0;
+        // for (int k = 0; k < m.rows; k++) {
+        //     for (int i = 0; i < m.cols; i++) {
+        //         in_data[n]
+        //             = m.at<float>(k, i);
+        //         n++;
+        //     }
+        // }
+
+        memcpy(in_data, m.data, sizeof(float) * m.cols * m.rows);
+        // for (int i = 0; i < m.cols * m.rows; i++) {
+        //     in_data[i]
+        //         = m.at<float>(i);
+        // }
+
+        for (int idx = undistort->w * undistort->h - 1; idx >= 0; idx--) {
+            // get interp. values
+            // 去畸变位置
+            float xx = undistort->remapX[idx];
+            float yy = undistort->remapY[idx];
+            // std::cout << "xx = " << xx << std::endl;
+            // std::cout << "yy = " << yy << std::endl;
+            // std::cout << "undistort->wOrg = " << undistort->wOrg << std::endl;
+
+            if (xx < 0)
+                out_data[idx] = 0;
+            else {
+                // get integer and rational parts
+                int xxi = xx;
+                int yyi = yy;
+                xx -= xxi;
+                yy -= yyi;
+                float xxyy = xx * yy;
+
+                // // get array base pointer
+                const float* src = in_data + xxi + yyi * undistort->wOrg;
+
+                // interpolate (bilinear)双线性插值
+                out_data[idx] = xxyy * src[1 + undistort->wOrg]
+                    + (yy - xxyy) * src[undistort->wOrg]
+                    + (xx - xxyy) * src[1]
+                    + (1 - xx - yy + xxyy) * src[0];
+            }
+        }
+        return result;
     }
 
     inline void loadTimestamps()
@@ -536,7 +607,7 @@ private:
     std::map<long long, dmvio::GTData> gtData;
 
     std::vector<ImageAndExposure*> preloadedImages;
-    std::vector<std::string> files;
+    std::vector<std::string> files, feature_files;
     std::vector<double> timestamps;
     std::vector<float> exposures;
     std::vector<long long> ids; // Saves the ids that are used by e.g. the EuRoC dataset.

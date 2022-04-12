@@ -1,4 +1,13 @@
 # Deep-dm-vio开发日志
+
+## 待探索的方向
+
+### 1. 直接法的回环检测
+
+参考LDSO
+
+
+
 ## 0.工具
 ### markdown
 
@@ -7,6 +16,22 @@
 ### 精度评估工具
 
 https://github.com/lukasvst/dm-vio-python-tools.git
+
+**evo**
+
+原版ape: `evo_ape tum ~/datasets/V2_03_difficult/mav0/state_groundtruth_estimate0/data.tum results/dmvioresult-euroc-2022-04-08--17-24-27/mav_V2_03_difficult_0/result.txt -p -a -v`
+
+APE w.r.t. translation part (m)
+(with SE(3) Umeyama alignment)
+
+       max      2.182458
+      mean      1.030545
+    median      1.039956
+       min      0.066733
+      rmse      1.128707
+       sse      2239.657025
+       std      0.460388
+
 
 ## 1.可视化
 ### Pangolin
@@ -130,5 +155,20 @@ cond5(no)->cond3
 op5->e
 ```
 
-## 2.评估
+## 2.点提取
 
+### 如何选取待跟踪的点?
+
+- 依据feature map的梯度?
+  - 结合原图像完成?
+- 依据uncertainty map?
+
+## 3.优化
+
+### 3.1.代价函数
+
+#### 可能存在的问题
+
+**1) feature map的fine层似乎会存在较多噪声**
+
+金字塔粗到精能解决吗

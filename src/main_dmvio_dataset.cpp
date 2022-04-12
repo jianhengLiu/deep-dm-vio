@@ -25,6 +25,12 @@
 
 // Main file for running on datasets, based on the main file of DSO.
 
+#define BACKWARD_HAS_DW 1
+#include "backward.hpp"
+namespace backward{
+    backward::SignalHandling sh;
+}
+
 #include <locale.h>
 #include <opencv2/highgui.hpp>
 #include <signal.h>
@@ -425,7 +431,7 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
             img = preloadedImages[ii];
         else {
             img = reader->getImage(i);
-            // featureImg = reader->getFeatureImage(i);
+            featureImg = reader->getFeatureImage(i);
         }
 
         bool skipFrame = false;
@@ -461,7 +467,8 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
                 imuDataSkipped = false;
             }
             // VIO入口：输入image,imu,gt
-            fullSystem->addActiveFrame(img, i, imuData.get(), (gtDataThere && found) ? &data : nullptr);
+            // fullSystem->addActiveFrame(img, i, imuData.get(), (gtDataThere && found) ? &data : nullptr);
+            fullSystem->addActiveFrame(img, featureImg, i, imuData.get(), (gtDataThere && found) ? &data : nullptr);
             if (gtDataThere && found && !disableAllDisplay) {
                 viewer->addGTCamPose(data.pose);
             }

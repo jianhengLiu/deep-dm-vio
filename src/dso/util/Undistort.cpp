@@ -194,7 +194,7 @@ void PhotometricUndistorter::processFrame(T* image_in, float exposure_time, floa
     int wh = w * h;
     float* data = output->image;
     assert(output->w == w && output->h == h);
-    assert(data != 0);
+    assert(data != nullptr);
 
     if (!valid || exposure_time <= 0 || setting_photometricCalibration == 0) // disable full photometric calibration.
     {
@@ -222,6 +222,7 @@ void PhotometricUndistorter::processFrame(T* image_in, float exposure_time, floa
 }
 template void PhotometricUndistorter::processFrame<unsigned char>(unsigned char* image_in, float exposure_time, float factor);
 template void PhotometricUndistorter::processFrame<unsigned short>(unsigned short* image_in, float exposure_time, float factor);
+// template void PhotometricUndistorter::processFrame<float>(float* image_in, float exposure_time, float factor);
 
 Undistort::~Undistort()
 {
@@ -455,10 +456,12 @@ ImageAndExposure* Undistort::undistort(const MinimalImage<T>* image_raw, float e
 }
 template ImageAndExposure* Undistort::undistort<unsigned char>(const MinimalImage<unsigned char>* image_raw, float exposure, double timestamp, float factor) const;
 template ImageAndExposure* Undistort::undistort<unsigned short>(const MinimalImage<unsigned short>* image_raw, float exposure, double timestamp, float factor) const;
+// template ImageAndExposure* Undistort::undistort<float>(const MinimalImage<float>* image_raw, float exposure, double timestamp, float factor) const;
 
+//* 添加图像高斯噪声
 void Undistort::applyBlurNoise(float* img) const
 {
-    if (benchmark_varBlurNoise == 0)
+    if (benchmark_varBlurNoise == 0) // 不添加噪声
         return;
 
     int numnoise = (benchmark_noiseGridsize + 8) * (benchmark_noiseGridsize + 8);

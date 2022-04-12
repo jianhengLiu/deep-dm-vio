@@ -112,15 +112,16 @@ struct FrameHessian {
     FrameShell* shell; //!< 帧的"壳", 保存一些不变的,要留下来的量
 
     //* 图像导数[0]:辐照度  [1]:x方向导数  [2]:y方向导数, （指针表示图像）
-    Eigen::Vector3f* dI; //!< 图像导数			 // trace, fine tracking. Used for direction select (not for gradient histograms etc.)
+    Eigen::Vector3f *dI; // trace, fine tracking. Used for direction select (not for gradient histograms etc.)
+    Eigen::Vector3f *dFeatureI; // trace, fine tracking. Used for direction select (not for gradient histograms etc.)
     Eigen::Vector3f* dIp[PYR_LEVELS]; //!< 各金字塔层的图像及导数 // coarse tracking / coarse initializer. NAN in [0] only.
     float* absSquaredGrad[PYR_LEVELS]; //!< 各层的x,y 方向梯度的平方和// only used for pixel select (histograms etc.). no NAN.
 
     bool addCamPrior;
 
     int frameID; //!< 所有关键帧的序号 // incremental ID for keyframes only!
-    static int instanceCounter;//!< 计数器
-  int idx; //!< 激活关键帧的序号(FrameHessian)
+    static int instanceCounter; //!< 计数器
+    int idx; //!< 激活关键帧的序号(FrameHessian)
 
     // Photometric Calibration Stuff
     float frameEnergyTH; //!< 阈值// set dynamically depending on tracking residual
@@ -138,37 +139,37 @@ struct FrameHessian {
     Vec6 nullspaces_scale;
 
     // variable info.
-  SE3 worldToCam_evalPT;//!< 在估计的相机位姿
-	// [0-5: 位姿左乘小量. 6-7: a,b 光度仿射系数]
-	//* 这三个是与线性化点的增量, 而光度参数不是增量, state就是值
-  Vec10 state_zero;//!< 固定的线性化点的状态增量, 为了计算进行缩放
-  Vec10 state_scaled;//!< 乘上比例系数的状态增量, 这个是真正求的值!!!
-  Vec10 state; //!< 计算的状态增量// [0-5: worldToCam-leftEps. 6-7: a,b]
-  //* step是与上一次优化结果的状态增量, [8 ,9]直接就设置为0了
-  Vec10 step;//!< 求解正规方程得到的增量
-  Vec10 step_backup;//!< 上一次的增量备份
-  Vec10 state_backup;//!< 上一次状态的备份
+    SE3 worldToCam_evalPT; //!< 在估计的相机位姿
+                           // [0-5: 位姿左乘小量. 6-7: a,b 光度仿射系数]
+                           //* 这三个是与线性化点的增量, 而光度参数不是增量, state就是值
+    Vec10 state_zero; //!< 固定的线性化点的状态增量, 为了计算进行缩放
+    Vec10 state_scaled; //!< 乘上比例系数的状态增量, 这个是真正求的值!!!
+    Vec10 state; //!< 计算的状态增量// [0-5: worldToCam-leftEps. 6-7: a,b]
+    //* step是与上一次优化结果的状态增量, [8 ,9]直接就设置为0了
+    Vec10 step; //!< 求解正规方程得到的增量
+    Vec10 step_backup; //!< 上一次的增量备份
+    Vec10 state_backup; //!< 上一次状态的备份
 
-	//内联提高效率, 返回上面的值
+    //内联提高效率, 返回上面的值
     EIGEN_STRONG_INLINE const SE3& get_worldToCam_evalPT() const { return worldToCam_evalPT; }
     EIGEN_STRONG_INLINE const Vec10& get_state_zero() const { return state_zero; } // the first 6 parameters of state_zero seem to be always 0 (as this part ist represented by the worldToCam_evalPT. The last two parameters on the other hand are not zero.
     EIGEN_STRONG_INLINE const Vec10& get_state() const { return state; }
     EIGEN_STRONG_INLINE const Vec10& get_state_scaled() const { return state_scaled; }
-    EIGEN_STRONG_INLINE const Vec10 get_state_minus_stateZero() const { return get_state() - get_state_zero(); }//x小量可以直接减
+    EIGEN_STRONG_INLINE const Vec10 get_state_minus_stateZero() const { return get_state() - get_state_zero(); } // x小量可以直接减
 
     // precalc values
-    SE3 PRE_worldToCam;//!< 预计算的, 位姿状态增量更新到位姿上
+    SE3 PRE_worldToCam; //!< 预计算的, 位姿状态增量更新到位姿上
     SE3 PRE_camToWorld;
-    std::vector<FrameFramePrecalc, Eigen::aligned_allocator<FrameFramePrecalc>> targetPrecalc;//!< 对于其它帧的预运算值
+    std::vector<FrameFramePrecalc, Eigen::aligned_allocator<FrameFramePrecalc>> targetPrecalc; //!< 对于其它帧的预运算值
     MinimalImageB3* debugImage;
 
     inline Vec6 w2c_leftEps() const { return get_state_scaled().head<6>(); }
     inline AffLight aff_g2l() const { return AffLight(get_state_scaled()[6], get_state_scaled()[7]); }
     inline AffLight aff_g2l_0() const { return AffLight(get_state_zero()[6] * SCALE_A, get_state_zero()[7] * SCALE_B); }
 
-	//* 设置FEJ点状态增量
+    //* 设置FEJ点状态增量
     void setStateZero(const Vec10& state_zero);
-	//* 设置增量, 同时复制state和state_scale
+    //* 设置增量, 同时复制state和state_scale
     inline void setState(const Vec10& state)
     {
 
@@ -180,7 +181,7 @@ struct FrameHessian {
         state_scaled[8] = SCALE_A * state[8];
         state_scaled[9] = SCALE_B * state[9];
 
-    //位姿更新
+        //位姿更新
         PRE_worldToCam = SE3::exp(w2c_leftEps()) * get_worldToCam_evalPT();
         PRE_camToWorld = PRE_worldToCam.inverse();
         // setCurrentNullspace();
@@ -247,6 +248,7 @@ struct FrameHessian {
     };
 
     void makeImages(float* color, CalibHessian* HCalib);
+    void makeFeatureImages(float* color, float* feature, CalibHessian* HCalib);
 
     inline Vec10 getPrior()
     {
