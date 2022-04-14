@@ -51,7 +51,7 @@ typedef Sophus::SO3d SO3;
 
 
 
-#define CPARS 4
+#define CPARS 4  // 相机内参维数Camera PARameterS
 
 
 typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic> MatXX;
@@ -138,6 +138,9 @@ typedef Eigen::Matrix<float,10,10> Mat1010f;
 typedef Eigen::Matrix<float,13,1> Vec13f;
 typedef Eigen::Matrix<float,9,9> Mat99f;
 typedef Eigen::Matrix<float,9,1> Vec9f;
+
+typedef Eigen::Matrix<float,7,7> Mat77f;
+typedef Eigen::Matrix<float,7,1> Vec7f;
 
 typedef Eigen::Matrix<float,4,2> Mat42f;
 typedef Eigen::Matrix<float,6,2> Mat62f;

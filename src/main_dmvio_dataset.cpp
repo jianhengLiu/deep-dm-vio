@@ -427,11 +427,13 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
 
         ImageAndExposure* img;
         ImageAndExposure* featureImg;
+        ImageAndExposure* confidenceImg;
         if (preload)
             img = preloadedImages[ii];
         else {
             img = reader->getImage(i);
             featureImg = reader->getFeatureImage(i);
+            // confidenceImg = reader->getConfidenceImage(i);
         }
 
         bool skipFrame = false;
@@ -478,6 +480,8 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
         }
 
         delete img;
+        delete featureImg;
+        delete confidenceImg;
 
         if (fullSystem->initFailed || setting_fullResetRequested) {
             // TODO: 这里与图片序列有关联,实时需要去掉

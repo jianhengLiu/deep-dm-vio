@@ -95,6 +95,7 @@ struct FrameFramePrecalc {
     inline ~FrameFramePrecalc() { }
     inline FrameFramePrecalc() { host = target = 0; }
     void set(FrameHessian* host, FrameHessian* target, CalibHessian* HCalib);
+    void setDeep(FrameHessian* host, FrameHessian* target, CalibHessian* HCalib);
 };
 
 /**
@@ -248,7 +249,7 @@ struct FrameHessian {
     };
 
     void makeImages(float* color, CalibHessian* HCalib);
-    void makeFeatureImages(float* color, float* feature, CalibHessian* HCalib);
+    void makeDeepImages(float* color, float* feature, CalibHessian* HCalib);
 
     inline Vec10 getPrior()
     {

@@ -566,6 +566,60 @@ void FullSystem::traceNewCoarse(FrameHessian* fh)
     //			trace_uninitialized, 100*trace_uninitialized/(float)trace_total);
 }
 
+//@ 利用新的帧 fh 对关键帧中的ImmaturePoint进行更新
+// 追溯
+void FullSystem::traceNewDeepCoarse(FrameHessian* fh)
+{
+    dmvio::TimeMeasurement timeMeasurement("traceNewCoarse");
+    boost::unique_lock<boost::mutex> lock(mapMutex);
+
+    int trace_total = 0, trace_good = 0, trace_oob = 0, trace_out = 0, trace_skip = 0, trace_badcondition = 0, trace_uninitialized = 0;
+
+    Mat33f K = Mat33f::Identity();
+    K(0, 0) = Hcalib.fxl();
+    K(1, 1) = Hcalib.fyl();
+    K(0, 2) = Hcalib.cxl();
+    K(1, 2) = Hcalib.cyl();
+
+    // 遍历关键帧
+    for (FrameHessian* host : frameHessians) // go through all active frames
+    {
+
+        SE3 hostToNew = fh->PRE_worldToCam * host->PRE_camToWorld;
+        Mat33f KRKi = K * hostToNew.rotationMatrix().cast<float>() * K.inverse();
+        Vec3f Kt = K * hostToNew.translation().cast<float>();
+
+        // Vec2f aff = AffLight::fromToVecExposure(host->ab_exposure, fh->ab_exposure, host->aff_g2l(), fh->aff_g2l()).cast<float>();
+
+        for (ImmaturePoint* ph : host->immaturePoints) {
+            // ph->traceOn(fh, KRKi, Kt, aff, &Hcalib, false);
+            ph->traceOnDeep(fh, KRKi, Kt, &Hcalib, false);
+
+            if (ph->lastTraceStatus == ImmaturePointStatus::IPS_GOOD)
+                trace_good++;
+            if (ph->lastTraceStatus == ImmaturePointStatus::IPS_BADCONDITION)
+                trace_badcondition++;
+            if (ph->lastTraceStatus == ImmaturePointStatus::IPS_OOB)
+                trace_oob++;
+            if (ph->lastTraceStatus == ImmaturePointStatus::IPS_OUTLIER)
+                trace_out++;
+            if (ph->lastTraceStatus == ImmaturePointStatus::IPS_SKIPPED)
+                trace_skip++;
+            if (ph->lastTraceStatus == ImmaturePointStatus::IPS_UNINITIALIZED)
+                trace_uninitialized++;
+            trace_total++;
+        }
+    }
+    //	printf("ADD: TRACE: %'d points. %'d (%.0f%%) good. %'d (%.0f%%) skip. %'d (%.0f%%) badcond. %'d (%.0f%%) oob. %'d (%.0f%%) out. %'d (%.0f%%) uninit.\n",
+    //			trace_total,
+    //			trace_good, 100*trace_good/(float)trace_total,
+    //			trace_skip, 100*trace_skip/(float)trace_total,
+    //			trace_badcondition, 100*trace_badcondition/(float)trace_total,
+    //			trace_oob, 100*trace_oob/(float)trace_total,
+    //			trace_out, 100*trace_out/(float)trace_total,
+    //			trace_uninitialized, 100*trace_uninitialized/(float)trace_total);
+}
+
 void FullSystem::activatePointsMT_Reductor(
     std::vector<PointHessian*>* optimized,
     std::vector<ImmaturePoint*>* toOptimize,
@@ -1104,8 +1158,8 @@ void FullSystem::addActiveFrame(ImageAndExposure* image, ImageAndExposure* featu
     // TODO: 无需曝光时间
     fh->ab_exposure = image->exposure_time;
     // 计算各层金字塔图像的L2梯度,保存在:fh->absSquaredGrad
-    // fh->makeImages(image->image, &Hcalib);
-    fh->makeFeatureImages(image->image, featureImage->image, &Hcalib);
+    fh->makeImages(image->image, &Hcalib);
+    // fh->makeDeepImages(image->image, featureImage->image, &Hcalib);
 
     measureInit.end();
 
@@ -1124,6 +1178,7 @@ void FullSystem::addActiveFrame(ImageAndExposure* image, ImageAndExposure* featu
         } else {
             dmvio::TimeMeasurement initMeasure("InitializerOtherFrames");
             bool initDone = coarseInitializer->trackFrame(fh, outputWrapper);
+            // bool initDone = coarseInitializer->trackDeepFrame(fh, outputWrapper);
             if (setting_useIMU) {
                 imuIntegration.addIMUDataToBA(*imuData);
                 Sophus::SE3 imuToWorld = gravityInit.addMeasure(*imuData);
@@ -1508,12 +1563,14 @@ void FullSystem::makeKeyFrame(FrameHessian* fh)
 
     //[ ***step 2*** ] 把这一帧来更新之前帧的未成熟点
     traceNewCoarse(fh);
+    // traceNewDeepCoarse(fh);
 
     boost::unique_lock<boost::mutex> lock(mapMutex);
 
     //[ ***step 3*** ] 选择要边缘化掉的帧
     // =========================== Flag Frames to be Marginalized. =========================
     flagFramesForMarginalization(fh);
+    // flagFramesForMarginalizationDeep(fh);
 
     //[ ***step 4*** ] 加入到关键帧序列
     // =========================== add New Frame to Hessian Struct. =========================
@@ -1524,6 +1581,7 @@ void FullSystem::makeKeyFrame(FrameHessian* fh)
     fh->shell->keyframeId = fh->frameID;
     allKeyFramesHistory.push_back(fh->shell);
     ef->insertFrame(fh, &Hcalib);
+    // ef->insertDeepFrame(fh, &Hcalib);
 
     setPrecalcValues(); // 每添加一个关键帧都会运行这个来设置位姿, 设置位姿线性化点
 
@@ -1799,6 +1857,7 @@ void FullSystem::setPrecalcValues()
     for (FrameHessian* fh : frameHessians) {
         fh->targetPrecalc.resize(frameHessians.size()); // 每个目标帧预运算容器, 大小是关键帧数
         for (unsigned int i = 0; i < frameHessians.size(); i++)
+            // fh->targetPrecalc[i].set(fh, frameHessians[i], &Hcalib); // 计算Host 与 target之间的变换关系
             fh->targetPrecalc[i].set(fh, frameHessians[i], &Hcalib); // 计算Host 与 target之间的变换关系
     }
 

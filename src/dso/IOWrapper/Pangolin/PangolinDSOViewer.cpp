@@ -125,7 +125,7 @@ namespace IOWrap {
         // parameter reconfigure gui
         pangolin::CreatePanel("ui").SetBounds(0.0, 1.0, 0.0, pangolin::Attach::Pix(UI_WIDTH));
 
-        pangolin::Var<int> settings_pointCloudMode("ui.PC_mode", 1, 1, 4, false);
+        pangolin::Var<int> settings_pointCloudMode("ui.PC_mode", 3, 1, 4, false);
 
         pangolin::Var<bool> settings_showKFCameras("ui.KFCam", false, true);
         pangolin::Var<bool> settings_showCurrentCamera("ui.CurrCam", true, true);
@@ -518,7 +518,12 @@ namespace IOWrap {
         boost::unique_lock<boost::mutex> lk(openImagesMutex);
 
         for (int i = 0; i < w * h; i++) {
-            internalVideoImg->data[i][0] = internalVideoImg->data[i][1] = internalVideoImg->data[i][2] = image->dI[i][0] * 0.8 > 255.0f ? 255.0 : image->dI[i][0] * 0.8;
+
+            if (image->dI[i][0] > 0) {
+                internalVideoImg->data[i][0] = internalVideoImg->data[i][1] = internalVideoImg->data[i][2] = image->dI[i][0] * 0.8 > 255.0f ? 255.0 : image->dI[i][0] * 0.8;
+            } else
+                internalVideoImg->data[i][0] = internalVideoImg->data[i][1] = internalVideoImg->data[i][2] = 0;
+            // internalVideoImg->data[i][0] = internalVideoImg->data[i][1] = internalVideoImg->data[i][2] = image->dI[i][0] * 0.8 > 255.0f ? 255.0 : image->dI[i][0] * 0.8;
         }
 
         videoImgChanged = true;
@@ -535,7 +540,7 @@ namespace IOWrap {
 
         for (int i = 0; i < w * h; i++) {
             if (image->dFeatureI[i][0] > 0) {
-                internalFeatureImg->data[i][0] = internalFeatureImg->data[i][1] = internalFeatureImg->data[i][2] = image->dFeatureI[i][0] * 150 > 255.0f ? 255.0 : image->dFeatureI[i][0] * 150;
+                internalFeatureImg->data[i][0] = internalFeatureImg->data[i][1] = internalFeatureImg->data[i][2] = image->dFeatureI[i][0] * 50 > 255.0f ? 255.0 : image->dFeatureI[i][0] * 50;
             } else
                 internalFeatureImg->data[i][0] = internalFeatureImg->data[i][1] = internalFeatureImg->data[i][2] = 0;
         }

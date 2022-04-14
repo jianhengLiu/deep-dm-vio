@@ -163,6 +163,22 @@ op5->e
   - 结合原图像完成?
 - 依据uncertainty map?
 
+**PixLoc: **不需要选点,是已知3D点,因此可以直接用学出来coarse feature map进行矫正;
+
+**思路1:20220412**
+
+```mermaid
+graph TD
+trackFrame(CoarseInitializer::trackFrame)-->pushLiveFrame(PangolinDSOViewer::pushLiveFrame)
+trackNewCoarse(FullSystem::trackNewCoarse)-->pushLiveFrame
+
+Pangolin[Pangolin]-->Upload(Upload)-->Activate(Activate)-->RenderToViewportFlipY(RenderToViewportFlipY)-->Upload
+```
+
+
+
+
+
 ## 3.优化
 
 ### 3.1.代价函数
@@ -172,3 +188,35 @@ op5->e
 **1) feature map的fine层似乎会存在较多噪声**
 
 金字塔粗到精能解决吗
+
+**2) feature map 似乎也会存在部分亮度变化**
+
+对结果有影响吗?
+
+能通过在训练中改善吗?
+
+
+
+
+
+## 20220412
+
+### 直接替换原图为feature map精度变差,跟踪存在丢失(对快速抖动不稳定)
+
+深度估计错误,然后就跟踪失败
+
+![image-20220412143936330](Deep-dm-vio%E5%BC%80%E5%8F%91%E6%97%A5%E5%BF%97.assets/image-20220412143936330.png)
+
+**可能原因:**
+
+- [ ] 使用feature map依据梯度进行的特征点提取不合适?
+- [ ] 仅依据feature_fine来构建金字塔进行跟踪不合理,应该使用pixloc方法,利用学习出来的不同层的feature map来进行多层金字塔跟踪
+- [ ] 还没有取消光照参数
+
+**解决办法:**
+
+- 原图+feature map
+  - 还是利用原图来进行特征提取,能量函数使用feature map来进行计算(pixloc)
+  - 结合多层来进行粗到精跟踪
+  - 先测试以下可行性?
+    - 后续问题是:若可行如何取缔利用原图进行的特征提取

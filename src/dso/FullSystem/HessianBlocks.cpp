@@ -191,7 +191,7 @@ void FrameHessian::makeImages(float* color, CalibHessian* HCalib)
  * @param color
  * @param HCalib
  */
-void FrameHessian::makeFeatureImages(float* color, float* feature, CalibHessian* HCalib)
+void FrameHessian::makeDeepImages(float* color, float* feature, CalibHessian* HCalib)
 {
     // 每一层创建图像值, 和图像梯度的存储空间
     for (int i = 0; i < pyrLevelsUsed; i++) {
@@ -210,7 +210,13 @@ void FrameHessian::makeFeatureImages(float* color, float* feature, CalibHessian*
     // 创建feature空间
     dFeatureI = new Eigen::Vector3f[w * h];
     for (int i = 0; i < w * h; i++) {
-        dFeatureI[i][0] = feature[i]; // [0]保存灰度值
+        // if (feature[i] > 0.0f) {
+        dFeatureI[i][0] = feature[i]; // [0]保存特征值
+        dI[i][0] = 50 * feature[i]; // [0]保存特征值
+        // } else {
+        //     dFeatureI[i][0] = 0; // [0]保存特征值
+        //     dI[i][0] = 0; // [0]保存特征值
+        // }
     }
 
     for (int lvl = 0; lvl < pyrLevelsUsed; lvl++) {
@@ -286,6 +292,39 @@ void FrameFramePrecalc::set(FrameHessian* host, FrameHessian* target, CalibHessi
     // TODO:
     PRE_aff_mode = AffLight::fromToVecExposure(host->ab_exposure, target->ab_exposure, host->aff_g2l(), target->aff_g2l()).cast<float>();
     PRE_b0_mode = host->aff_g2l_0().b;
+}
+
+//@ 计算优化前和优化后的相对位姿, 相对光度变化, 及中间变量
+void FrameFramePrecalc::setDeep(FrameHessian* host, FrameHessian* target, CalibHessian* HCalib)
+{
+    this->host = host;
+    this->target = target;
+
+    // 优化前host target间位姿变换
+    SE3 leftToLeft_0 = target->get_worldToCam_evalPT() * host->get_worldToCam_evalPT().inverse();
+    PRE_RTll_0 = (leftToLeft_0.rotationMatrix()).cast<float>();
+    PRE_tTll_0 = (leftToLeft_0.translation()).cast<float>();
+
+    // 优化后host到target间位姿变换
+    SE3 leftToLeft = target->PRE_worldToCam * host->PRE_camToWorld;
+    PRE_RTll = (leftToLeft.rotationMatrix()).cast<float>();
+    PRE_tTll = (leftToLeft.translation()).cast<float>();
+    distanceLL = leftToLeft.translation().norm();
+
+    Mat33f K = Mat33f::Zero();
+    K(0, 0) = HCalib->fxl();
+    K(1, 1) = HCalib->fyl();
+    K(0, 2) = HCalib->cxl();
+    K(1, 2) = HCalib->cyl();
+    K(2, 2) = 1;
+    PRE_KRKiTll = K * PRE_RTll * K.inverse();
+    PRE_RKiTll = PRE_RTll * K.inverse();
+    PRE_KtTll = K * PRE_tTll;
+
+    // 光度仿射值
+    // TODO:
+    // PRE_aff_mode = AffLight::fromToVecExposure(host->ab_exposure, target->ab_exposure, host->aff_g2l(), target->aff_g2l()).cast<float>();
+    // PRE_b0_mode = host->aff_g2l_0().b;
 }
 
 }

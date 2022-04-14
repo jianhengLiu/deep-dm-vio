@@ -38,10 +38,11 @@
 
 namespace dso {
 
-bool EFAdjointsValid = false;
-bool EFIndicesValid = false;
-bool EFDeltaValid = false;
+bool EFAdjointsValid = false; //!< 是否设置状态伴随矩阵
+bool EFIndicesValid = false; //!< 是否设置frame, point, res的ID
+bool EFDeltaValid = false; //!< 是否设置状态增量值
 
+//@ 计算adHost(F), adTarget(F)
 void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
 {
 
@@ -52,8 +53,9 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
     adHost = new Mat88[nFrames * nFrames];
     adTarget = new Mat88[nFrames * nFrames];
 
-    for (int h = 0; h < nFrames; h++)
-        for (int t = 0; t < nFrames; t++) {
+    for (int h = 0; h < nFrames; h++) // 主帧host
+        for (int t = 0; t < nFrames; t++) // 目标帧target
+        {
             FrameHessian* host = frames[h]->data;
             FrameHessian* target = frames[t]->data;
 
@@ -96,6 +98,95 @@ void EnergyFunctional::setAdjointsF(CalibHessian* Hcalib)
         for (int t = 0; t < nFrames; t++) {
             adHostF[h + t * nFrames] = adHost[h + t * nFrames].cast<float>();
             adTargetF[h + t * nFrames] = adTarget[h + t * nFrames].cast<float>();
+        }
+
+    cPriorF = cPrior.cast<float>();
+
+    EFAdjointsValid = true;
+}
+
+//@ 计算adHost(F), adTarget(F)
+void EnergyFunctional::setDeepAdjointsF(CalibHessian* Hcalib)
+{
+    // if (adHost != 0)
+    //     delete[] adHost;
+    // if (adTarget != 0)
+    //     delete[] adTarget;
+    // adHost = new Mat88[nFrames * nFrames];
+    // adTarget = new Mat88[nFrames * nFrames];
+    if (adDeepHost != 0)
+        delete[] adDeepHost;
+    if (adDeepTarget != 0)
+        delete[] adDeepTarget;
+    adDeepHost = new Mat66[nFrames * nFrames];
+    adDeepTarget = new Mat66[nFrames * nFrames];
+
+    for (int h = 0; h < nFrames; h++) // 主帧host
+        for (int t = 0; t < nFrames; t++) // 目标帧target
+        {
+            FrameHessian* host = frames[h]->data;
+            FrameHessian* target = frames[t]->data;
+
+            SE3 hostToTarget = target->get_worldToCam_evalPT() * host->get_worldToCam_evalPT().inverse();
+
+            // Mat88 AH = Mat88::Identity();
+            // Mat88 AT = Mat88::Identity();
+            Mat66 AH = Mat66::Identity();
+            Mat66 AT = Mat66::Identity();
+
+            // AH.topLeftCorner<6, 6>() = -hostToTarget.Adj().transpose();
+            // AT.topLeftCorner<6, 6>() = Mat66::Identity();
+            AH = -hostToTarget.Adj().transpose();
+            AT = Mat66::Identity();
+
+            // Vec2f affLL = AffLight::fromToVecExposure(host->ab_exposure, target->ab_exposure, host->aff_g2l_0(), target->aff_g2l_0()).cast<float>();
+            // AT(6, 6) = -affLL[0];
+            // AH(6, 6) = affLL[0];
+            // AT(7, 7) = -1;
+            // AH(7, 7) = affLL[0];
+
+            // AH.block<3, 8>(0, 0) *= SCALE_XI_TRANS;
+            // AH.block<3, 8>(3, 0) *= SCALE_XI_ROT;
+            // AH.block<1, 8>(6, 0) *= SCALE_A;
+            // AH.block<1, 8>(7, 0) *= SCALE_B;
+            // AT.block<3, 8>(0, 0) *= SCALE_XI_TRANS;
+            // AT.block<3, 8>(3, 0) *= SCALE_XI_ROT;
+            // AT.block<1, 8>(6, 0) *= SCALE_A;
+            // AT.block<1, 8>(7, 0) *= SCALE_B;
+            AH.block<3, 6>(0, 0) *= SCALE_XI_TRANS;
+            AH.block<3, 6>(3, 0) *= SCALE_XI_ROT;
+            AT.block<3, 6>(0, 0) *= SCALE_XI_TRANS;
+            AT.block<3, 6>(3, 0) *= SCALE_XI_ROT;
+
+            // adHost[h + t * nFrames] = AH;
+            // adTarget[h + t * nFrames] = AT;
+            adDeepHost[h + t * nFrames] = AH;
+            adDeepTarget[h + t * nFrames] = AT;
+        }
+    cPrior = VecC::Constant(setting_initialCalibHessian); // 常数矩阵
+
+    // if (adHostF != 0)
+    //     delete[] adHostF;
+    // if (adTargetF != 0)
+    //     delete[] adTargetF;
+    // adHostF = new Mat88f[nFrames * nFrames];
+    // adTargetF = new Mat88f[nFrames * nFrames];
+    if (adDeepHostF != 0)
+        delete[] adDeepHostF;
+    if (adDeepTargetF != 0)
+        delete[] adDeepTargetF;
+    adDeepHostF = new Mat66f[nFrames * nFrames];
+    adDeepTargetF = new Mat66f[nFrames * nFrames];
+
+    // for (int h = 0; h < nFrames; h++)
+    //     for (int t = 0; t < nFrames; t++) {
+    //         adHostF[h + t * nFrames] = adHost[h + t * nFrames].cast<float>();
+    //         adTargetF[h + t * nFrames] = adTarget[h + t * nFrames].cast<float>();
+    //     }
+    for (int h = 0; h < nFrames; h++)
+        for (int t = 0; t < nFrames; t++) {
+            adDeepHostF[h + t * nFrames] = adDeepHost[h + t * nFrames].cast<float>();
+            adDeepTargetF[h + t * nFrames] = adDeepTarget[h + t * nFrames].cast<float>();
         }
 
     cPriorF = cPrior.cast<float>();
@@ -163,6 +254,33 @@ EnergyFunctional::~EnergyFunctional()
 
 //@ 计算各种状态的相对量的增量
 void EnergyFunctional::setDeltaF(CalibHessian* HCalib)
+{
+    if (adHTdeltaF != 0)
+        delete[] adHTdeltaF;
+    adHTdeltaF = new Mat18f[nFrames * nFrames];
+    for (int h = 0; h < nFrames; h++)
+        for (int t = 0; t < nFrames; t++) {
+            int idx = h + t * nFrames;
+            //! delta_th = Adj * delta_t or delta_th = Adj * delta_h
+            // 加一起应该是, 两帧之间位姿变换的增量, 因为h变一点, t变一点
+            adHTdeltaF[idx] = frames[h]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adHostF[idx]
+                + frames[t]->data->get_state_minus_stateZero().head<8>().cast<float>().transpose() * adTargetF[idx];
+        }
+
+    cDeltaF = HCalib->value_minus_value_zero.cast<float>(); // 相机内参增量
+    for (EFFrame* f : frames) {
+        f->delta = f->data->get_state_minus_stateZero().head<8>(); // 帧位姿增量
+        f->delta_prior = (f->data->get_state() - f->data->getPriorZero()).head<8>(); // 先验增量
+
+        for (EFPoint* p : f->points)
+            p->deltaF = p->data->idepth - p->data->idepth_zero; // 逆深度的增量
+    }
+
+    EFDeltaValid = true;
+}
+
+//@ 计算各种状态的相对量的增量
+void EnergyFunctional::setDeepDeltaF(CalibHessian* HCalib)
 {
     if (adHTdeltaF != 0)
         delete[] adHTdeltaF;
@@ -453,6 +571,61 @@ EFFrame* EnergyFunctional::insertFrame(FrameHessian* fh, CalibHessian* Hcalib)
 
     return eff;
 }
+
+//@ 向能量函数中增加一帧, 进行的操作: 改变正规方程, 重新排ID, 共视关系
+EFFrame* EnergyFunctional::insertDeepFrame(FrameHessian* fh, CalibHessian* Hcalib)
+{
+    // 建立优化用的能量函数帧. 并加进能量函数frames中
+    EFFrame* eff = new EFFrame(fh);
+    eff->idx = frames.size();
+    frames.push_back(eff);
+
+    nFrames++;
+    fh->efFrame = eff; // FrameHessian 指向能量函数帧
+
+    // assert(HM.cols() == 8 * nFrames + CPARS - 8); // 边缘化掉一帧, 缺8个
+    // // 一个帧8个参数 + 相机内参
+    // bM.conservativeResize(8 * nFrames + CPARS);
+    // bMForGTSAM.conservativeResize(8 * nFrames + CPARS);
+    // HM.conservativeResize(8 * nFrames + CPARS, 8 * nFrames + CPARS);
+    // HMForGTSAM.conservativeResize(8 * nFrames + CPARS, 8 * nFrames + CPARS);
+    // bM.tail<8>().setZero();
+    // bMForGTSAM.tail<8>().setZero();
+    // HM.rightCols<8>().setZero();
+    // HM.bottomRows<8>().setZero();
+    // HMForGTSAM.rightCols<8>().setZero();
+    // HMForGTSAM.bottomRows<8>().setZero();
+    assert(HM.cols() == 6 * nFrames + CPARS - 6); // 边缘化掉一帧, 缺8个
+    // 一个帧6个参数 + 相机内参
+    bM.conservativeResize(6 * nFrames + CPARS);
+    bMForGTSAM.conservativeResize(6 * nFrames + CPARS);
+    HM.conservativeResize(6 * nFrames + CPARS, 6 * nFrames + CPARS);
+    HMForGTSAM.conservativeResize(6 * nFrames + CPARS, 6 * nFrames + CPARS);
+    bM.tail<6>().setZero();
+    bMForGTSAM.tail<6>().setZero();
+    HM.rightCols<6>().setZero();
+    HM.bottomRows<6>().setZero();
+    HMForGTSAM.rightCols<6>().setZero();
+    HMForGTSAM.bottomRows<6>().setZero();
+
+    EFIndicesValid = false;
+    EFAdjointsValid = false;
+    EFDeltaValid = false;
+
+    // setAdjointsF(Hcalib); // 设置伴随矩阵
+    setDeepAdjointsF(Hcalib); // 设置伴随矩阵
+    makeIDX(); // 设置ID
+
+    for (EFFrame* fh2 : frames) {
+        // 前32位是host帧的历史ID, 后32位是Target的历史ID
+        connectivityMap[(((uint64_t)eff->frameID) << 32) + ((uint64_t)fh2->frameID)] = Eigen::Vector2i(0, 0);
+        if (fh2 != eff)
+            connectivityMap[(((uint64_t)fh2->frameID) << 32) + ((uint64_t)eff->frameID)] = Eigen::Vector2i(0, 0);
+    }
+
+    return eff;
+}
+
 EFPoint* EnergyFunctional::insertPoint(PointHessian* ph)
 {
     EFPoint* efp = new EFPoint(ph, ph->host->efFrame);

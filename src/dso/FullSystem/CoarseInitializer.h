@@ -80,6 +80,7 @@ public:
 
     void setFirst(CalibHessian* HCalib, FrameHessian* newFrameHessian);
     bool trackFrame(FrameHessian* newFrameHessian, std::vector<IOWrap::Output3DWrapper*>& wraps);
+    bool trackDeepFrame(FrameHessian* newFrameHessian, std::vector<IOWrap::Output3DWrapper*>& wraps);
 
     int frameID;
     bool fixAffine;
@@ -116,14 +117,23 @@ private:
     Eigen::Vector3f* dIFist[PYR_LEVELS];
 
     Eigen::DiagonalMatrix<float, 8> wM;
+    Eigen::DiagonalMatrix<float, 6> wMDeep;
 
     // temporary buffers for H and b.
     Vec10f* JbBuffer; // 0-7: sum(dd * dp). 8: sum(res*dd). 9: 1/(1+sum(dd*dd))=inverse hessian entry.
     Vec10f* JbBuffer_new;
 
+    // temporary buffers for H and b. Deep
+    Vec8f* JbDeepBuffer; // 0-5: sum(dd * dp). 6: sum(res*dd). 7: 1/(1+sum(dd*dd))=inverse hessian entry.
+    Vec8f* JbDeepBuffer_new;
+
     //* 9维向量, 乘积获得9*9矩阵, 并做的累加器
     Accumulator9 acc9; //!< Hessian 矩阵
     Accumulator9 acc9SC; //!< Schur部分Hessian
+
+    //* Deep: 7维向量, 乘积获得9*9矩阵, 并做的累加器
+    Accumulator7 acc7; //!< Hessian 矩阵
+    Accumulator7 acc7SC; //!< Schur部分Hessian
 
     // Vec3f dGrads[PYR_LEVELS];
 
@@ -138,6 +148,11 @@ private:
         Mat88f& H_out_sc, Vec8f& b_out_sc,
         const SE3& refToNew, AffLight refToNew_aff,
         bool plot);
+    Vec3f calcDeepResAndGS(
+        int lvl,
+        Mat66f& H_out, Vec6f& b_out,
+        Mat66f& H_out_sc, Vec6f& b_out_sc,
+        const SE3& refToNew, bool plot);
     Vec3f calcEC(int lvl); // returns OLD NERGY, NEW ENERGY, NUM TERMS.
     void optReg(int lvl);
 
@@ -147,7 +162,9 @@ private:
 
     void resetPoints(int lvl);
     void doStep(int lvl, float lambda, Vec8f inc);
+    void doStepDeep(int lvl, float lambda, Vec6f inc);
     void applyStep(int lvl);
+    void applyStepDeep(int lvl);
 
     void makeGradients(Eigen::Vector3f** data);
 

@@ -808,6 +808,9 @@ void CoarseTracker::debugPlotIDepthMap(float* minID_pt, float* maxID_pt, std::ve
             int c = lastRef->dIp[lvl][i][0] * 0.9f;
             if (c > 255)
                 c = 255;
+            else if (c < 0) {
+                c = 0;
+            }
             mf.at(i) = Vec3b(c, c, c);
         }
         int wl = w[lvl];

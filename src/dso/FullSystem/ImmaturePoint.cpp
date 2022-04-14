@@ -435,6 +435,375 @@ ImmaturePointStatus ImmaturePoint::traceOn(FrameHessian* frame, const Mat33f& ho
     return lastTraceStatus = ImmaturePointStatus::IPS_GOOD; //上一次的位置
 }
 
+/*
+ * returns
+ * * OOB -> point is optimized and marginalized
+ * * UPDATED -> point has been updated.
+ * * SKIP -> point has not been updated.
+ */
+//@ 使用深度滤波对未成熟点进行深度估计
+ImmaturePointStatus ImmaturePoint::traceOnDeep(FrameHessian* frame, const Mat33f& hostToFrame_KRKi, const Vec3f& hostToFrame_Kt, CalibHessian* HCalib, bool debugPrint)
+{
+    if (lastTraceStatus == ImmaturePointStatus::IPS_OOB)
+        return lastTraceStatus;
+
+    debugPrint = false; // rand()%100==0;
+    float maxPixSearch = (wG[0] + hG[0]) * setting_maxPixSearch; // 极限搜索的最大长度
+
+    if (debugPrint)
+        printf("trace pt (%.1f %.1f) from frame %d to %d. Range %f -> %f. t %f %f %f!\n",
+            u, v,
+            host->shell->id, frame->shell->id,
+            idepth_min, idepth_max,
+            hostToFrame_Kt[0], hostToFrame_Kt[1], hostToFrame_Kt[2]);
+
+    //	const float stepsize = 1.0;				// stepsize for initial discrete search.
+    //	const int GNIterations = 3;				// max # GN iterations
+    //	const float GNThreshold = 0.1;				// GN stop after this stepsize.
+    //	const float extraSlackOnTH = 1.2;			// for energy-based outlier check, be slightly more relaxed by this factor.
+    //	const float slackInterval = 0.8;			// if pixel-interval is smaller than this, leave it be.
+    //	const float minImprovementFactor = 2;		// if pixel-interval is smaller than this, leave it be.
+    // ============== project min and max. return if one of them is OOB ===================
+    //[ ***step 1*** ] 计算出来搜索的上下限, 对应idepth_max, idepth_min
+    Vec3f pr = hostToFrame_KRKi * Vec3f(u, v, 1);
+    Vec3f ptpMin = pr + hostToFrame_Kt * idepth_min;
+    float uMin = ptpMin[0] / ptpMin[2];
+    float vMin = ptpMin[1] / ptpMin[2];
+
+    Mat22f Rplane = hostToFrame_KRKi.topLeftCorner<2, 2>();
+    int maxRotPatX = 0;
+    int maxRotPatY = 0;
+    Vec2f rotatetPattern[MAX_RES_PER_POINT];
+    for (int idx = 0; idx < patternNum; idx++) {
+        rotatetPattern[idx] = Rplane * Vec2f(patternP[idx][0], patternP[idx][1]);
+        int absX = (int)abs(rotatetPattern[idx][0]);
+        int absY = (int)abs(rotatetPattern[idx][1]);
+        maxRotPatX = std::max(absX, maxRotPatX);
+        maxRotPatY = std::max(absY, maxRotPatY);
+    }
+    int realBoundU = maxRotPatX + 2;
+    int realBoundV = maxRotPatY + 2;
+    int boundU = 4;
+    int boundV = 4;
+    boundU = std::max(boundU, realBoundU);
+    boundV = std::max(boundV, realBoundV);
+
+    // 如果超出图像范围则设为 OOB
+    if (!(uMin > boundU && vMin > boundV && uMin < wG[0] - boundU - 1 && vMin < hG[0] - boundV - 1)) {
+        if (debugPrint)
+            printf("OOB uMin %f %f - %f %f %f (id %f-%f)!\n",
+                u, v, uMin, vMin, ptpMin[2], idepth_min, idepth_max);
+        lastTraceUV = Vec2f(-1, -1);
+        lastTracePixelInterval = 0;
+        return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+    }
+
+    float dist;
+    float uMax;
+    float vMax;
+    Vec3f ptpMax;
+    if (std::isfinite(idepth_max)) {
+        ptpMax = pr + hostToFrame_Kt * idepth_max;
+        uMax = ptpMax[0] / ptpMax[2];
+        vMax = ptpMax[1] / ptpMax[2];
+
+        if (!(uMax > boundU && vMax > boundV && uMax < wG[0] - boundU - 1 && vMax < hG[0] - boundV - 1)) {
+            if (debugPrint)
+                printf("OOB uMax  %f %f - %f %f!\n", u, v, uMax, vMax);
+            lastTraceUV = Vec2f(-1, -1);
+            lastTracePixelInterval = 0;
+            return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+        }
+
+        // ============== check their distance. everything below 2px is OK (-> skip). ===================
+        dist = (uMin - uMax) * (uMin - uMax) + (vMin - vMax) * (vMin - vMax);
+        dist = sqrtf(dist);
+        //* 搜索的范围太小
+        if (dist < setting_trace_slackInterval) {
+            if (debugPrint)
+                printf("TOO CERTAIN ALREADY (dist %f)!\n", dist);
+
+            lastTraceUV = Vec2f(uMax + uMin, vMax + vMin) * 0.5;
+            lastTracePixelInterval = dist;
+            return lastTraceStatus = ImmaturePointStatus::IPS_SKIPPED;
+        }
+        assert(dist > 0);
+    } else {
+        //* 上限无穷大, 则设为最大值
+        dist = maxPixSearch;
+
+        // project to arbitrary depth to get direction.
+        ptpMax = pr + hostToFrame_Kt * 0.01;
+        uMax = ptpMax[0] / ptpMax[2];
+        vMax = ptpMax[1] / ptpMax[2];
+
+        // direction.
+        float dx = uMax - uMin;
+        float dy = vMax - vMin;
+        float d = 1.0f / sqrtf(dx * dx + dy * dy);
+
+        //* 根据比例得到最大值
+        // set to [setting_maxPixSearch].
+        uMax = uMin + dist * dx * d;
+        vMax = vMin + dist * dy * d;
+
+        // may still be out!
+        if (!(uMax > boundU && vMax > boundV && uMax < wG[0] - boundU - 1 && vMax < hG[0] - boundV - 1)) {
+            if (debugPrint)
+                printf("OOB uMax-coarse %f %f %f!\n", uMax, vMax, ptpMax[2]);
+            lastTraceUV = Vec2f(-1, -1);
+            lastTracePixelInterval = 0;
+            return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+        }
+        assert(dist > 0);
+    }
+
+    //? 为什么是这个值呢??? 0.75 - 1.5
+    // 这个值是两个帧上深度的比值, 它的变化太大就是前后尺度变化太大了
+    // set OOB if scale change too big.
+    if (!(idepth_min < 0 || (ptpMin[2] > 0.75 && ptpMin[2] < 1.5))) {
+        if (debugPrint)
+            printf("OOB SCALE %f %f %f!\n", uMax, vMax, ptpMin[2]);
+        lastTraceUV = Vec2f(-1, -1);
+        lastTracePixelInterval = 0;
+        return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+    }
+
+    //[ ***step 2*** ] 计算误差大小(图像梯度和极线夹角大小), 夹角大, 小的几何误差会有很大影响
+    // ============== compute error-bounds on result in pixel. if the new interval is not at least 1/2 of the old, SKIP ===================
+    float dx = setting_trace_stepsize * (uMax - uMin);
+    float dy = setting_trace_stepsize * (vMax - vMin);
+
+    //! (dIx*dx + dIy*dy)^2
+    float a = (Vec2f(dx, dy).transpose() * gradH * Vec2f(dx, dy));
+    //! (dIx*dy - dIy*dx)^2
+    float b = (Vec2f(dy, -dx).transpose() * gradH * Vec2f(dy, -dx)); // (dx, dy)垂直方向的乘积
+                                                                     // 计算的是极线方向和梯度方向的夹角大小，90度则a=0, errorInPixel变大；平行时候b=0
+    float errorInPixel = 0.2f + 0.2f * (a + b) / a; // 没有使用LSD的方法, 估计是能有效防止位移小的情况
+
+    //* errorInPixel大说明垂直, 这时误差会很大, 视为bad
+    if (errorInPixel * setting_trace_minImprovementFactor > dist && std::isfinite(idepth_max)) {
+        if (debugPrint)
+            printf("NO SIGNIFICANT IMPROVMENT (%f)!\n", errorInPixel);
+        lastTraceUV = Vec2f(uMax + uMin, vMax + vMin) * 0.5;
+        lastTracePixelInterval = dist;
+        return lastTraceStatus = ImmaturePointStatus::IPS_BADCONDITION;
+    }
+
+    if (errorInPixel > 10)
+        errorInPixel = 10;
+
+    // ============== do the discrete search ===================
+    //[ ***step 3*** ] 在极线上找到最小的光度误差的位置, 并计算和第二次的比值作为质量
+    dx /= dist;
+    dy /= dist;
+
+    if (debugPrint)
+        printf("trace pt (%.1f %.1f) from frame %d to %d. Range %f (%.1f %.1f) -> %f (%.1f %.1f)! ErrorInPixel %.1f!\n",
+            u, v,
+            host->shell->id, frame->shell->id,
+            idepth_min, uMin, vMin,
+            idepth_max, uMax, vMax,
+            errorInPixel);
+
+    if (dist > maxPixSearch) {
+        uMax = uMin + maxPixSearch * dx;
+        vMax = vMin + maxPixSearch * dy;
+        dist = maxPixSearch;
+    }
+
+    int numSteps = 1.9999f + dist / setting_trace_stepsize; // 步数
+
+    float randShift = uMin * 1000 - floorf(uMin * 1000); // 	取小数点后面的做随机数??
+    float ptx = uMin - randShift * dx;
+    float pty = vMin - randShift * dy;
+
+    if (!std::isfinite(dx) || !std::isfinite(dy)) {
+        // printf("COUGHT INF / NAN dxdy (%f %f)!\n", dx, dx);
+
+        lastTracePixelInterval = 0;
+        lastTraceUV = Vec2f(-1, -1);
+        return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+    }
+
+    //* 沿着级线搜索误差最小的位置
+    float errors[100];
+    float bestU = 0, bestV = 0, bestEnergy = 1e10;
+    int bestIdx = -1;
+    if (numSteps >= 100)
+        numSteps = 99;
+
+    for (int i = 0; i < numSteps; i++) {
+        float energy = 0;
+        for (int idx = 0; idx < patternNum; idx++) {
+            float hitColor = getInterpolatedElement31(frame->dI,
+                (float)(ptx + rotatetPattern[idx][0]),
+                (float)(pty + rotatetPattern[idx][1]),
+                wG[0]);
+
+            if (!std::isfinite(hitColor)) {
+                energy += 1e5;
+                continue;
+            }
+            // float residual = hitColor - (float)(hostToFrame_affine[0] * color[idx] + hostToFrame_affine[1]);
+            float residual = hitColor - color[idx];
+            float hw = fabs(residual) < setting_huberTH ? 1 : setting_huberTH / fabs(residual);
+            energy += hw * residual * residual * (2 - hw);
+        }
+
+        if (debugPrint)
+            printf("step %.1f %.1f (id %f): energy = %f!\n",
+                ptx, pty, 0.0f, energy);
+
+        errors[i] = energy;
+        if (energy < bestEnergy) {
+            bestU = ptx;
+            bestV = pty;
+            bestEnergy = energy;
+            bestIdx = i;
+        }
+
+        // 每次走1 dist对应大小
+        ptx += dx;
+        pty += dy;
+    }
+
+    //* 在一定的半径内找最到误差第二小的, 差的足够大, 才更好(这个常用)
+    // find best score outside a +-2px radius.
+    float secondBest = 1e10;
+    for (int i = 0; i < numSteps; i++) {
+        if ((i < bestIdx - setting_minTraceTestRadius || i > bestIdx + setting_minTraceTestRadius) && errors[i] < secondBest)
+            secondBest = errors[i];
+    }
+    float newQuality = secondBest / bestEnergy;
+    if (newQuality < quality || numSteps > 10)
+        quality = newQuality;
+
+    //[ ***step 4*** ] 在上面的最优位置进行线性搜索, 进行求精
+    // ============== do GN optimization ===================
+    float uBak = bestU, vBak = bestV, gnstepsize = 1, stepBack = 0;
+    if (setting_trace_GNIterations > 0)
+        bestEnergy = 1e5;
+    int gnStepsGood = 0, gnStepsBad = 0;
+    for (int it = 0; it < setting_trace_GNIterations; it++) {
+        float H = 1, b = 0, energy = 0;
+        for (int idx = 0; idx < patternNum; idx++) {
+            float posU = (float)(bestU + rotatetPattern[idx][0]);
+            float posV = (float)(bestV + rotatetPattern[idx][1]);
+            if (posU < 0 || posV < 0 || posU >= wG[0] - 1 || posV >= hG[0] - 1) {
+                if (debugPrint)
+                    printf("OOB uMax  %f %f - %f %f!\n", posU, posV, uMax, vMax);
+                lastTraceUV = Vec2f(-1, -1);
+                lastTracePixelInterval = 0;
+                return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+            }
+
+            Vec3f hitColor = getInterpolatedElement33(frame->dI, posU, posV, wG[0]);
+
+            if (!std::isfinite((float)hitColor[0])) {
+                energy += 1e5;
+                continue;
+            }
+            // float residual = hitColor[0] - (hostToFrame_affine[0] * color[idx] + hostToFrame_affine[1]);
+            float residual = hitColor[0] - color[idx];
+            float dResdDist = dx * hitColor[1] + dy * hitColor[2];
+            float hw = fabs(residual) < setting_huberTH ? 1 : setting_huberTH / fabs(residual);
+
+            H += hw * dResdDist * dResdDist;
+            b += hw * residual * dResdDist;
+            energy += weights[idx] * weights[idx] * hw * residual * residual * (2 - hw);
+        }
+
+        if (energy > bestEnergy) {
+            gnStepsBad++;
+
+            // do a smaller step from old point.
+            stepBack *= 0.5; //* 减小步长再进行计算
+            bestU = uBak + stepBack * dx;
+            bestV = vBak + stepBack * dy;
+            if (debugPrint)
+                printf("GN BACK %d: E %f, H %f, b %f. id-step %f. UV %f %f -> %f %f.\n",
+                    it, energy, H, b, stepBack,
+                    uBak, vBak, bestU, bestV);
+        } else {
+            gnStepsGood++;
+
+            float step = -gnstepsize * b / H;
+            if (step < -0.5)
+                step = -0.5;
+            else if (step > 0.5)
+                step = 0.5;
+
+            if (!std::isfinite(step))
+                step = 0;
+
+            uBak = bestU;
+            vBak = bestV;
+            stepBack = step;
+
+            bestU += step * dx;
+            bestV += step * dy;
+            bestEnergy = energy;
+
+            if (debugPrint)
+                printf("GN step %d: E %f, H %f, b %f. id-step %f. UV %f %f -> %f %f.\n",
+                    it, energy, H, b, step,
+                    uBak, vBak, bestU, bestV);
+        }
+
+        if (fabsf(stepBack) < setting_trace_GNThreshold)
+            break;
+    }
+
+    // ============== detect energy-based outlier. ===================
+    //	float absGrad0 = getInterpolatedElement(frame->absSquaredGrad[0],bestU, bestV, wG[0]);
+    //	float absGrad1 = getInterpolatedElement(frame->absSquaredGrad[1],bestU*0.5-0.25, bestV*0.5-0.25, wG[1]);
+    //	float absGrad2 = getInterpolatedElement(frame->absSquaredGrad[2],bestU*0.25-0.375, bestV*0.25-0.375, wG[2]);
+    //* 残差太大, 则设置为外点
+    if (!(bestEnergy < energyTH * setting_trace_extraSlackOnTH))
+    //			|| (absGrad0*areaGradientSlackFactor < host->frameGradTH
+    //		     && absGrad1*areaGradientSlackFactor < host->frameGradTH*0.75f
+    //			 && absGrad2*areaGradientSlackFactor < host->frameGradTH*0.50f))
+    {
+        if (debugPrint)
+            printf("OUTLIER!\n");
+
+        lastTracePixelInterval = 0;
+        lastTraceUV = Vec2f(-1, -1);
+        if (lastTraceStatus == ImmaturePointStatus::IPS_OUTLIER)
+            return lastTraceStatus = ImmaturePointStatus::IPS_OOB;
+        else
+            return lastTraceStatus = ImmaturePointStatus::IPS_OUTLIER;
+    }
+
+    //[ ***step 5*** ] 根据得到的最优位置重新计算逆深度的范围
+    // ============== set new interval ===================
+    //! u = (pr[0] + Kt[0]*idepth) / (pr[2] + Kt[2]*idepth) ==> idepth = (u*pr[2] - pr[0]) / (Kt[0] - u*Kt[2])
+    //! v = (pr[1] + Kt[1]*idepth) / (pr[2] + Kt[2]*idepth) ==> idepth = (v*pr[2] - pr[1]) / (Kt[1] - v*Kt[2])
+    //* 取误差最大的
+    if (dx * dx > dy * dy) {
+        idepth_min = (pr[2] * (bestU - errorInPixel * dx) - pr[0]) / (hostToFrame_Kt[0] - hostToFrame_Kt[2] * (bestU - errorInPixel * dx));
+        idepth_max = (pr[2] * (bestU + errorInPixel * dx) - pr[0]) / (hostToFrame_Kt[0] - hostToFrame_Kt[2] * (bestU + errorInPixel * dx));
+    } else {
+        idepth_min = (pr[2] * (bestV - errorInPixel * dy) - pr[1]) / (hostToFrame_Kt[1] - hostToFrame_Kt[2] * (bestV - errorInPixel * dy));
+        idepth_max = (pr[2] * (bestV + errorInPixel * dy) - pr[1]) / (hostToFrame_Kt[1] - hostToFrame_Kt[2] * (bestV + errorInPixel * dy));
+    }
+    if (idepth_min > idepth_max)
+        std::swap<float>(idepth_min, idepth_max);
+
+    if (!std::isfinite(idepth_min) || !std::isfinite(idepth_max) || (idepth_max < 0)) {
+        // printf("COUGHT INF / NAN minmax depth (%f %f)!\n", idepth_min, idepth_max);
+
+        lastTracePixelInterval = 0;
+        lastTraceUV = Vec2f(-1, -1);
+        return lastTraceStatus = ImmaturePointStatus::IPS_OUTLIER;
+    }
+
+    lastTracePixelInterval = 2 * errorInPixel; // 搜索的范围
+    lastTraceUV = Vec2f(bestU, bestV); // 上一次得到的最优位置
+    return lastTraceStatus = ImmaturePointStatus::IPS_GOOD; //上一次的位置
+}
+
 float ImmaturePoint::getdPixdd(
     CalibHessian* HCalib,
     ImmaturePointTemporaryResidual* tmpRes,

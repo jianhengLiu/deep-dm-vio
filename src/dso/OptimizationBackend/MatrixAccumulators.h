@@ -1606,7 +1606,7 @@ public:
     }
 
 private:
-    EIGEN_ALIGN16 float SSEData[4 * 45];
+    EIGEN_ALIGN16 float SSEData[4 * 45]; // 这里45是 1+2+3+4+5+..+9 = 45这是由于Hessian是对称阵。
     EIGEN_ALIGN16 float SSEData1k[4 * 45];
     EIGEN_ALIGN16 float SSEData1m[4 * 45];
     float numIn1, numIn1k, numIn1m;
@@ -1630,6 +1630,438 @@ private:
             numIn1m += numIn1k;
             numIn1k = 0;
             memset(SSEData1k, 0, sizeof(float) * 4 * 45);
+        }
+    }
+};
+
+class Accumulator7 {
+public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+    Mat77f H;
+    Vec7f b;
+    size_t num;
+
+    inline void initialize()
+    {
+        H.setZero();
+        b.setZero();
+        memset(SSEData, 0, sizeof(float) * 4 * 28); // 会对128位, 16字节（1字节byte=8位bit）进行对齐, 因此每个数用4个float存
+        memset(SSEData1k, 0, sizeof(float) * 4 * 28);
+        memset(SSEData1m, 0, sizeof(float) * 4 * 28);
+        num = numIn1 = numIn1k = numIn1m = 0;
+    }
+
+    inline void finish()
+    {
+        H.setZero();
+        shiftUp(true); // 强制进位到m
+        assert(numIn1 == 0);
+        assert(numIn1k == 0);
+
+        int idx = 0;
+        //* H矩阵是对称的, 只有28个数值
+        for (int r = 0; r < 7; r++)
+            for (int c = r; c < 7; c++) {
+                // 由于_mm_mul_ps是元素相乘非内积，所以需要把属于同一块的元素加起来
+                float d = SSEData1m[idx + 0] + SSEData1m[idx + 1] + SSEData1m[idx + 2] + SSEData1m[idx + 3];
+                H(r, c) = H(c, r) = d;
+                idx += 4;
+            }
+        assert(idx == 4 * 28);
+    }
+
+    // 计算一个7维向量相乘, 得到7*7矩阵
+    // sse指令集加速:https://www.cnblogs.com/dragon2012/p/5200698.html
+    inline void updateSSE(
+        const __m128 J0, const __m128 J1,
+        const __m128 J2, const __m128 J3,
+        const __m128 J4, const __m128 J5,
+        const __m128 J6)
+    {
+        float* pt = SSEData;
+        // pt += J0^t*J0
+        // load系列，用于加载数据，从内存到暂存器.
+        // _mm_load_ps: 用于packed（数组）的加载（下面的都是用于packed的），要求p的地址是16字节对齐，否则读取的结果会出错，（r0 := p[0], r1 := p[1], r2 := p[2], r3 := p[3]）：把一个float数组的四个元素依次读取，返回一个组合的__m128类型的SSE数据类型
+        // store系列，用于将计算结果等SSE暂存器的数据保存到内存中。
+        // _mm_store_ps: p[i] = a[i]
+        // _mm_mul_ps: 按packed里元素相乘：https://docs.microsoft.com/en-us/previous-versions/visualstudio/visual-studio-2008/22kbk6t9(v=vs.90)?redirectedfrom=MSDN
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J0)));
+        pt += 4; // float 32位，sse利用128位进行储存，所以每次移动四位到下一个储存单元
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J1)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J2)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0, J6)));
+        pt += 4;
+
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1, J1)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1, J2)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1, J6)));
+        pt += 4;
+
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2, J2)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2, J6)));
+        pt += 4;
+
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3, J6)));
+        pt += 4;
+
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4, J6)));
+        pt += 4;
+
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J5, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J5, J6)));
+        pt += 4;
+
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J6, J6)));
+        pt += 4;
+
+        num += 4;
+        numIn1++;
+        shiftUp(false);
+    }
+
+    // 带权重的9维向量得到9*9矩阵
+    inline void updateSSE_eighted(
+        const __m128 J0, const __m128 J1,
+        const __m128 J2, const __m128 J3,
+        const __m128 J4, const __m128 J5,
+        const __m128 J6, const __m128 J7,
+        const __m128 J8, const __m128 w)
+    {
+        float* pt = SSEData;
+
+        __m128 J0w = _mm_mul_ps(J0, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J0)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J1)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J2)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J0w, J8)));
+        pt += 4;
+
+        __m128 J1w = _mm_mul_ps(J1, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J1)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J2)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J1w, J8)));
+        pt += 4;
+
+        __m128 J2w = _mm_mul_ps(J2, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J2)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J2w, J8)));
+        pt += 4;
+
+        __m128 J3w = _mm_mul_ps(J3, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3w, J3)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3w, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3w, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J3w, J8)));
+        pt += 4;
+
+        __m128 J4w = _mm_mul_ps(J4, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4w, J4)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4w, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J4w, J8)));
+        pt += 4;
+
+        __m128 J5w = _mm_mul_ps(J5, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J5w, J5)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J5w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J5w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J5w, J8)));
+        pt += 4;
+
+        __m128 J6w = _mm_mul_ps(J6, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J6w, J6)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J6w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J6w, J8)));
+        pt += 4;
+
+        __m128 J7w = _mm_mul_ps(J7, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J7w, J7)));
+        pt += 4;
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J7w, J8)));
+        pt += 4;
+
+        __m128 J8w = _mm_mul_ps(J8, w);
+        _mm_store_ps(pt, _mm_add_ps(_mm_load_ps(pt), _mm_mul_ps(J8w, J8)));
+        pt += 4;
+
+        num += 4;
+        numIn1++;
+        shiftUp(false);
+    }
+
+    // 不使用_m128来计算
+    inline void updateSingle(
+        const float J0, const float J1,
+        const float J2, const float J3,
+        const float J4, const float J5,
+        const float J6, int off = 0)
+    {
+        float* pt = SSEData + off;
+        *pt += J0 * J0;
+        pt += 4;
+        *pt += J1 * J0;
+        pt += 4;
+        *pt += J2 * J0;
+        pt += 4;
+        *pt += J3 * J0;
+        pt += 4;
+        *pt += J4 * J0;
+        pt += 4;
+        *pt += J5 * J0;
+        pt += 4;
+        *pt += J6 * J0;
+        pt += 4;
+
+        *pt += J1 * J1;
+        pt += 4;
+        *pt += J2 * J1;
+        pt += 4;
+        *pt += J3 * J1;
+        pt += 4;
+        *pt += J4 * J1;
+        pt += 4;
+        *pt += J5 * J1;
+        pt += 4;
+        *pt += J6 * J1;
+        pt += 4;
+
+        *pt += J2 * J2;
+        pt += 4;
+        *pt += J3 * J2;
+        pt += 4;
+        *pt += J4 * J2;
+        pt += 4;
+        *pt += J5 * J2;
+        pt += 4;
+        *pt += J6 * J2;
+        pt += 4;
+
+        *pt += J3 * J3;
+        pt += 4;
+        *pt += J4 * J3;
+        pt += 4;
+        *pt += J5 * J3;
+        pt += 4;
+        *pt += J6 * J3;
+        pt += 4;
+
+        *pt += J4 * J4;
+        pt += 4;
+        *pt += J5 * J4;
+        pt += 4;
+        *pt += J6 * J4;
+        pt += 4;
+
+        *pt += J5 * J5;
+        pt += 4;
+        *pt += J6 * J5;
+        pt += 4;
+
+        *pt += J6 * J6;
+        pt += 4;
+
+        num++;
+        numIn1++;
+        shiftUp(false);
+    }
+
+    inline void updateSingleWeighted(
+        float J0, float J1,
+        float J2, float J3,
+        float J4, float J5,
+        float J6, float w,
+        int off = 0)
+    {
+
+        float* pt = SSEData + off;
+        *pt += J0 * J0 * w;
+        pt += 4;
+        J0 *= w;
+        *pt += J1 * J0;
+        pt += 4;
+        *pt += J2 * J0;
+        pt += 4;
+        *pt += J3 * J0;
+        pt += 4;
+        *pt += J4 * J0;
+        pt += 4;
+        *pt += J5 * J0;
+        pt += 4;
+        *pt += J6 * J0;
+        pt += 4;
+
+        *pt += J1 * J1 * w;
+        pt += 4;
+        J1 *= w;
+        *pt += J2 * J1;
+        pt += 4;
+        *pt += J3 * J1;
+        pt += 4;
+        *pt += J4 * J1;
+        pt += 4;
+        *pt += J5 * J1;
+        pt += 4;
+        *pt += J6 * J1;
+        pt += 4;
+
+        *pt += J2 * J2 * w;
+        pt += 4;
+        J2 *= w;
+        *pt += J3 * J2;
+        pt += 4;
+        *pt += J4 * J2;
+        pt += 4;
+        *pt += J5 * J2;
+        pt += 4;
+        *pt += J6 * J2;
+        pt += 4;
+
+        *pt += J3 * J3 * w;
+        pt += 4;
+        J3 *= w;
+        *pt += J4 * J3;
+        pt += 4;
+        *pt += J5 * J3;
+        pt += 4;
+        *pt += J6 * J3;
+        pt += 4;
+
+        *pt += J4 * J4 * w;
+        pt += 4;
+        J4 *= w;
+        *pt += J5 * J4;
+        pt += 4;
+        *pt += J6 * J4;
+        pt += 4;
+
+        *pt += J5 * J5 * w;
+        pt += 4;
+        J5 *= w;
+        *pt += J6 * J5;
+        pt += 4;
+
+        *pt += J6 * J6 * w;
+        pt += 4;
+        J6 *= w;
+
+        num++;
+        numIn1++;
+        shiftUp(false);
+    }
+
+private:
+    EIGEN_ALIGN16 float SSEData[4 * 28]; // 7x7，Hessian是对称阵：7+6+5+4+3+2+1 = 28
+    EIGEN_ALIGN16 float SSEData1k[4 * 28];
+    EIGEN_ALIGN16 float SSEData1m[4 * 28];
+    float numIn1, numIn1k, numIn1m;
+
+    //* 进位
+    void shiftUp(bool force)
+    {
+        // 大于1000, 相加则进位到 k
+        if (numIn1 > 1000 || force) //? 为啥1000次就要进位, 答: 只要不超过128位就行, 一个大概的数, 1000个32位的相加, 肯定超不了
+        {
+            for (int i = 0; i < 28; i++)
+                _mm_store_ps(SSEData1k + 4 * i, _mm_add_ps(_mm_load_ps(SSEData + 4 * i), _mm_load_ps(SSEData1k + 4 * i)));
+            numIn1k += numIn1;
+            numIn1 = 0;
+            memset(SSEData, 0, sizeof(float) * 4 * 28);
+        }
+
+        if (numIn1k > 1000 || force) {
+            for (int i = 0; i < 28; i++)
+                _mm_store_ps(SSEData1m + 4 * i, _mm_add_ps(_mm_load_ps(SSEData1k + 4 * i), _mm_load_ps(SSEData1m + 4 * i)));
+            numIn1m += numIn1k;
+            numIn1k = 0;
+            memset(SSEData1k, 0, sizeof(float) * 4 * 28);
         }
     }
 };

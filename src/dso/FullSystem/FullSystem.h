@@ -184,6 +184,7 @@ private:
     // mainPipelineFunctions
     std::pair<Vec4, bool> trackNewCoarse(FrameHessian* fh, Sophus::SE3* referenceToFrameHint = 0);
     void traceNewCoarse(FrameHessian* fh);
+    void traceNewDeepCoarse(FrameHessian* fh);
     void activatePoints();
     void activatePointsMT();
     void activatePointsOldFirst();
@@ -191,6 +192,7 @@ private:
     void makeNewTraces(FrameHessian* newFrame, float* gtDepth);
     void initializeFromInitializer(FrameHessian* newFrame);
     void flagFramesForMarginalization(FrameHessian* newFH);
+    void flagFramesForMarginalizationDeep(FrameHessian* newFH);
 
     void removeOutliers();
 

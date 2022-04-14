@@ -39,6 +39,7 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgcodecs/imgcodecs_c.h>
+#include <opencv2/imgproc.hpp>
 #include <sstream>
 #include <string>
 
@@ -145,7 +146,8 @@ public:
         } else {
             getdir(path, files);
             // 读取网络学习的feature map
-            getdir(path + "/../feat_fine", feature_files);
+            getdir(path + "/../feat_fine", featureFiles);
+            getdir(path + "/../conf_fine", confidenceFiles);
         }
 
         undistort = Undistort::getUndistorterForFile(calibFile, gammaFile, vignetteFile);
@@ -158,7 +160,8 @@ public:
         // load timestamps if possible.
         loadTimestamps();
         printf("ImageFolderReader: got %d files in %s!\n", (int)files.size(), path.c_str());
-        printf("ImageFolderReader: got %d files in %s!\n", (int)feature_files.size(), (path + "/../feat_fine").c_str());
+        printf("ImageFolderReader: got %d files in %s!\n", (int)featureFiles.size(), (path + "/../feat_fine").c_str());
+        printf("ImageFolderReader: got %d files in %s!\n", (int)confidenceFiles.size(), (path + "/../conf_fine").c_str());
     }
     ~ImageFolderReader()
     {
@@ -234,6 +237,11 @@ public:
     ImageAndExposure* getFeatureImage(int id, bool forceLoadDirectly = false)
     {
         return getFeatureImage_internal(id, 0);
+    }
+
+    ImageAndExposure* getConfidenceImage(int id, bool forceLoadDirectly = false)
+    {
+        return getConfidenceImage_internal(id, 0);
     }
 
     inline float* getPhotometricGamma()
@@ -482,7 +490,7 @@ private:
 
     ImageAndExposure* getFeatureImage_internal(int id, int unused)
     {
-        cv::Mat m = cv::imread(feature_files[id], cv::IMREAD_UNCHANGED);
+        cv::Mat m = cv::imread(featureFiles[id], cv::IMREAD_UNCHANGED);
         // cv::imshow("m", m);
         // cv::waitKey(1);
         ImageAndExposure* result = new ImageAndExposure(m.cols, m.rows, (timestamps.size() == 0 ? 0.0 : timestamps[id]));
@@ -513,9 +521,68 @@ private:
             // 去畸变位置
             float xx = undistort->remapX[idx];
             float yy = undistort->remapY[idx];
-            // std::cout << "xx = " << xx << std::endl;
-            // std::cout << "yy = " << yy << std::endl;
-            // std::cout << "undistort->wOrg = " << undistort->wOrg << std::endl;
+
+            if (xx < 0)
+                out_data[idx] = 0;
+            else {
+                // get integer and rational parts
+                int xxi = xx;
+                int yyi = yy;
+                xx -= xxi;
+                yy -= yyi;
+                float xxyy = xx * yy;
+
+                // // get array base pointer
+                const float* src = in_data + xxi + yyi * undistort->wOrg;
+
+                // interpolate (bilinear)双线性插值
+                out_data[idx] = xxyy * src[1 + undistort->wOrg]
+                    + (yy - xxyy) * src[undistort->wOrg]
+                    + (xx - xxyy) * src[1]
+                    + (1 - xx - yy + xxyy) * src[0];
+            }
+        }
+        return result;
+    }
+
+    ImageAndExposure* getConfidenceImage_internal(int id, int unused)
+    {
+        cv::Mat m = cv::imread(confidenceFiles[id], cv::IMREAD_UNCHANGED);
+        cv::Mat confidence = 255 * m.clone();
+        confidence.convertTo(confidence, CV_8UC1);
+        cv::applyColorMap(confidence, confidence, cv::COLORMAP_JET);
+        // confidence = cv2.applyColorMap(
+        //     np.uint8(confidence*255), cv2.COLORMAP_TURBO)
+        cv::imshow("confidence", confidence);
+        cv::waitKey(1);
+        ImageAndExposure* result = new ImageAndExposure(m.cols, m.rows, (timestamps.size() == 0 ? 0.0 : timestamps[id]));
+
+        float* out_data = result->image; // 复制的图像做输出
+        float* in_data = undistort->photometricUndist->output->image;
+
+        // float* in_data;
+        // in_data = new float[m.cols * m.rows];
+
+        // int n = 0;
+        // for (int k = 0; k < m.rows; k++) {
+        //     for (int i = 0; i < m.cols; i++) {
+        //         in_data[n]
+        //             = m.at<float>(k, i);
+        //         n++;
+        //     }
+        // }
+
+        memcpy(in_data, m.data, sizeof(float) * m.cols * m.rows);
+        // for (int i = 0; i < m.cols * m.rows; i++) {
+        //     in_data[i]
+        //         = m.at<float>(i);
+        // }
+
+        for (int idx = undistort->w * undistort->h - 1; idx >= 0; idx--) {
+            // get interp. values
+            // 去畸变位置
+            float xx = undistort->remapX[idx];
+            float yy = undistort->remapY[idx];
 
             if (xx < 0)
                 out_data[idx] = 0;
@@ -607,7 +674,7 @@ private:
     std::map<long long, dmvio::GTData> gtData;
 
     std::vector<ImageAndExposure*> preloadedImages;
-    std::vector<std::string> files, feature_files;
+    std::vector<std::string> files, featureFiles, confidenceFiles;
     std::vector<double> timestamps;
     std::vector<float> exposures;
     std::vector<long long> ids; // Saves the ids that are used by e.g. the EuRoC dataset.
